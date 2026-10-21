@@ -2,8 +2,8 @@ import {
   DebtCalculationResult,
   ExpenseItem,
   ParticipantBalance,
-  ParticipantProfile,
   SimplifiedDebtTransfer,
+  UserProfile,
 } from '../types';
 
 /**
@@ -18,7 +18,7 @@ import {
  */
 export function calculateBalances(
   expenses: ExpenseItem[],
-  participants: ParticipantProfile[],
+  participants: UserProfile[],
   settledTransferIds: string[] = []
 ): DebtCalculationResult {
   if (participants.length === 0) {
@@ -44,7 +44,7 @@ export function calculateBalances(
 
   // Map participant ID to their tracking record (tracked in integer cents for absolute precision)
   interface InternalBalance {
-    participant: ParticipantProfile;
+    participant: UserProfile;
     paidCents: number;
     consumedCents: number;
     itemsPaid: ExpenseItem[];

@@ -1,39 +1,20 @@
+import { CloudExpense, CloudShoppingItem, PartyApiResponse } from '../api/googleSheets';
+import { ExpenseItem, ItemCategory, PartyEvent, ShoppingItem, UserProfile } from '../types';
 import {
-  CloudExpense,
-  CloudMemberPayload,
-  PartyApiResponse,
-} from '../api/googleSheets';
-import {
-  ExpenseItem,
-  ItemCategory,
-  ParticipantProfile,
-  PartyEvent,
-} from '../types';
+  isOperationPendingForExpense,
+  isOperationPendingForTransfer,
+} from '../api/cloudQueue';
 
 const VALID_CATEGORIES: ItemCategory[] = ['food', 'drink', 'hookah', 'delivery', 'other'];
 
-/**
- * Converts a local profile into the payload expected by the Google Apps Script
- * `syncPartyMembers` action.
- */
-export function toCloudMember(profile: ParticipantProfile): CloudMemberPayload {
-  return {
-    id: profile.id,
-    name: profile.name,
-    phone: profile.paymentInfo?.phone || '',
-    paymentUrl: profile.paymentInfo?.sbpQrOrUrl || '',
-  };
-}
-
-export function mapCloudProfiles(res: PartyApiResponse): ParticipantProfile[] {
+export function mapCloudParticipants(res: PartyApiResponse): UserProfile[] {
   return (res.participants || []).map((p) => ({
     id: String(p.id),
     name: String(p.name || 'Участник'),
+    phone: String(p.phone ?? ''),
+    bank: String(p.bank || 'Сбербанк'),
     avatarColor: p.avatarColor,
-    paymentInfo: {
-      phone: String(p.phone ?? ''),
-      sbpQrOrUrl: p.paymentUrl,
-    },
+    avatarUrl: p.avatarUrl ? String(p.avatarUrl) : undefined,
   }));
 }
 
@@ -52,10 +33,22 @@ export function mapCloudExpenses(expenses?: CloudExpense[]): ExpenseItem[] {
   });
 }
 
-export function mergeUniqueIds(...groups: (string[] | undefined)[]): string[] {
-  return Array.from(
-    new Set(groups.flatMap((group) => (group || []).map((id) => String(id))).filter(Boolean))
-  );
+export function mapCloudShoppingList(items?: CloudShoppingItem[]): ShoppingItem[] {
+  return (items || []).map((item) => {
+    const category = String(item.category || '') as ItemCategory;
+    return {
+      id: String(item.id),
+      title: String(item.title || 'Покупка'),
+      estimatedAmount: Number(item.estimatedAmount) || undefined,
+      assignedUserId: item.assignedUserId ? String(item.assignedUserId) : undefined,
+      isBought: Boolean(item.isBought),
+      boughtById: item.boughtById ? String(item.boughtById) : undefined,
+      actualAmount: Number(item.actualAmount) || undefined,
+      convertedExpenseId: item.convertedExpenseId ? String(item.convertedExpenseId) : undefined,
+      category: VALID_CATEGORIES.includes(category) ? category : undefined,
+      createdAt: item.createdAt ? String(item.createdAt) : undefined,
+    };
+  });
 }
 
 function isSameExpense(a: ExpenseItem, b: ExpenseItem): boolean {
@@ -77,7 +70,7 @@ function isSameExpense(a: ExpenseItem, b: ExpenseItem): boolean {
 
 export interface MergedCloudParty {
   party: Partial<PartyEvent>;
-  profiles: ParticipantProfile[];
+  profiles: UserProfile[];
   /**
    * Local expenses that are not present in the cloud response yet. The caller
    * can push them again so an offline addition is not lost on refresh.
@@ -92,15 +85,10 @@ export interface MergedCloudParty {
 }
 
 /**
- * Converts a `getPartyDetails` / `syncPartyMembers` response into the local
- * party shape. The cloud room is the shared source of truth for members and
- * expenses: this is what makes edits and deletions visible on every device.
- *
- * With `keepLocalOnlyExpenses` (used by the background poll) locally created
- * expenses are preserved until the cloud confirms them, while deleted ids are
- * filtered through the tombstone list. Only ids listed in `pendingExpenseIds`
- * are re-uploaded; a row missing from the sheet may simply have been deleted
- * on another device.
+ * Converts a `getPartyDetails` response into the local party shape. The cloud
+ * room is the shared source of truth for members, expenses and payment status.
+ * There is no local profile address book: participants are the authenticated
+ * users returned by the server.
  */
 export function mergeCloudParty(
   local: PartyEvent,
@@ -109,8 +97,7 @@ export function mergeCloudParty(
 ): MergedCloudParty | null {
   if (!res.success || !res.party) return null;
 
-  const profiles = mapCloudProfiles(res);
-  const cloudParticipantIds = profiles.map((p) => p.id);
+  const profiles = mapCloudParticipants(res);
   const tombstoneIds = new Set(local.deletedExpenseIds || []);
   const pendingIds = new Set(local.pendingExpenseIds || []);
   const localExpensesById = new Map((local.expenses || []).map((e) => [e.id, e]));
@@ -133,10 +120,11 @@ export function mergeCloudParty(
     .map((expense) => {
       if (!options.keepLocalOnlyExpenses) return expense;
       const localExpense = localExpensesById.get(expense.id);
-      // A pending edit must not be overwritten by an older cloud snapshot.
+      // A pending edit or offline mutation must not be overwritten by an older cloud snapshot.
+      const hasPendingQueueMutation = isOperationPendingForExpense(local.id, expense.id);
       if (
         localExpense &&
-        pendingIds.has(expense.id) &&
+        (pendingIds.has(expense.id) || hasPendingQueueMutation) &&
         !isSameExpense(localExpense, expense)
       ) {
         return localExpense;
@@ -148,7 +136,13 @@ export function mergeCloudParty(
   let pendingUpdates: ExpenseItem[] = [];
   if (options.keepLocalOnlyExpenses) {
     for (const expense of local.expenses || []) {
-      if (!pendingIds.has(expense.id) || tombstoneIds.has(expense.id)) continue;
+      const hasPendingQueueMutation = isOperationPendingForExpense(local.id, expense.id);
+      if (
+        (!pendingIds.has(expense.id) && !hasPendingQueueMutation) ||
+        tombstoneIds.has(expense.id)
+      ) {
+        continue;
+      }
       const cloudExpense = cloudById.get(expense.id);
       if (!cloudExpense) {
         pendingUpload.push(expense);
@@ -178,6 +172,37 @@ export function mergeCloudParty(
       })
     : [];
 
+  // Conflict resolution for debt settlement transfers (Last-Write-Wins):
+  // If a transfer has a pending offline mutation in the queue, keep the local settlement state.
+  let settledTransferIds: string[];
+  if (res.paymentStatuses) {
+    const cloudSettledSet = new Set(
+      res.paymentStatuses.filter((status) => status.isPaid).map((status) => status.transferId)
+    );
+    const localSettledSet = new Set(local.settledTransferIds || []);
+
+    const allTransferIds = new Set([
+      ...res.paymentStatuses.map((status) => status.transferId),
+      ...localSettledSet,
+    ]);
+
+    const finalSettled = new Set<string>();
+    for (const tid of allTransferIds) {
+      if (isOperationPendingForTransfer(local.id, tid)) {
+        if (localSettledSet.has(tid)) {
+          finalSettled.add(tid);
+        }
+      } else {
+        if (cloudSettledSet.has(tid)) {
+          finalSettled.add(tid);
+        }
+      }
+    }
+    settledTransferIds = Array.from(finalSettled);
+  } else {
+    settledTransferIds = local.settledTransferIds || [];
+  }
+
   return {
     profiles,
     pendingUpload,
@@ -186,9 +211,10 @@ export function mergeCloudParty(
       id: res.party.id,
       code: res.party.code,
       title: res.party.title,
-      participants:
-        cloudParticipantIds.length > 0 ? cloudParticipantIds : local.participants,
+      participants: profiles.length > 0 ? profiles : local.participants,
       expenses,
+      shoppingList: res.shoppingList ? mapCloudShoppingList(res.shoppingList) : local.shoppingList || [],
+      settledTransferIds,
       deletedExpenseIds: remainingTombstones,
       pendingExpenseIds: remainingPending,
     },

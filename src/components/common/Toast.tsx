@@ -2,6 +2,7 @@ import React, {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -10,6 +11,7 @@ import { Text, StyleSheet, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemeTokens, useTheme } from '../../context/ThemeContext';
+import { registerGlobalToastListener } from '../../utils/toastBus';
 
 export type ToastType = 'success' | 'info' | 'warning' | 'error';
 
@@ -44,7 +46,8 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Animated values are stable for the lifetime of the provider. Lazy state
   // initializers keep them out of refs, which must not be read during render.
   const [opacity] = useState(() => new Animated.Value(0));
-  const [translateY] = useState(() => new Animated.Value(-30));
+  const [translateY] = useState(() => new Animated.Value(-24));
+  const [scale] = useState(() => new Animated.Value(0.92));
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showToast = useCallback(
@@ -61,12 +64,18 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       Animated.parallel([
         Animated.timing(opacity, {
           toValue: 1,
-          duration: 220,
+          duration: 200,
           useNativeDriver: true,
         }),
         Animated.spring(translateY, {
           toValue: 0,
-          tension: 80,
+          tension: 90,
+          friction: 9,
+          useNativeDriver: true,
+        }),
+        Animated.spring(scale, {
+          toValue: 1,
+          tension: 90,
           friction: 9,
           useNativeDriver: true,
         }),
@@ -77,12 +86,17 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         Animated.parallel([
           Animated.timing(opacity, {
             toValue: 0,
-            duration: 200,
+            duration: 180,
             useNativeDriver: true,
           }),
           Animated.timing(translateY, {
-            toValue: -20,
-            duration: 200,
+            toValue: -16,
+            duration: 180,
+            useNativeDriver: true,
+          }),
+          Animated.timing(scale, {
+            toValue: 0.94,
+            duration: 180,
             useNativeDriver: true,
           }),
         ]).start(() => {
@@ -90,7 +104,17 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         });
       }, duration);
     },
-    [opacity, translateY]
+    [opacity, translateY, scale]
+  );
+
+  // Background writes report their final failures through this bridge so the
+  // queue does not need to know about React context.
+  useEffect(
+    () =>
+      registerGlobalToastListener((message, options) =>
+        showToast(message, options as ToastOptions)
+      ),
+    [showToast]
   );
 
   const getBorderColor = () => {
@@ -134,7 +158,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             styles.container,
             {
               opacity,
-              transform: [{ translateY }],
+              transform: [{ translateY }, { scale }],
               borderColor: getBorderColor(),
               top: insets.top + 8,
             },

@@ -1,25 +1,30 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  KeyboardAvoidingView,
   RefreshControl,
-  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { usePartyStore } from '../store/usePartyStore';
-import { useTheme } from '../context/ThemeContext';
-import { ExpenseItem } from '../types';
+import { ThemeTokens, useTheme } from '../context/ThemeContext';
+import { ExpenseItem, ShoppingItem } from '../types';
 import { ParticipantChips } from '../components/party/ParticipantChips';
 import { BillItemList } from '../components/party/BillItemList';
 import { AddItemModal } from '../components/party/AddItemModal';
 import { CloudSyncModal } from '../components/party/CloudSyncModal';
+import { ShoppingListView } from '../components/shopping/ShoppingListView';
+import {
+  AddShoppingItemModal,
+  PARTY_PRESETS,
+} from '../components/shopping/AddShoppingItemModal';
+import { ConvertShoppingModal } from '../components/shopping/ConvertShoppingModal';
 import { formatRubles } from '../utils/currency';
 import { Button } from '../components/common/Button';
 import { useToast } from '../components/common/Toast';
+import { AnimatedNumber } from '../components/common/AnimatedNumber';
 
 interface PartyScreenProps {
   onNavigateToResults: () => void;
@@ -27,13 +32,24 @@ interface PartyScreenProps {
 
 export const PartyScreen: React.FC<PartyScreenProps> = ({ onNavigateToResults }) => {
   const { theme } = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const currentParty = usePartyStore((s) => s.currentParty);
   const syncWithCloud = usePartyStore((s) => s.syncWithCloud);
   const { showToast } = useToast();
 
+  const [subTab, setSubTab] = useState<'bill' | 'shopping'>('bill');
+
+  // Expense Modals
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isCloudModalVisible, setIsCloudModalVisible] = useState(false);
   const [editingItem, setEditingItem] = useState<ExpenseItem | null>(null);
+
+  // Shopping Modals
+  const [isAddShoppingModalVisible, setIsAddShoppingModalVisible] = useState(false);
+  const [editingShoppingItem, setEditingShoppingItem] = useState<ShoppingItem | null>(null);
+  const [shoppingPreset, setShoppingPreset] = useState<(typeof PARTY_PRESETS)[0] | null>(null);
+  const [convertingShoppingItem, setConvertingShoppingItem] = useState<ShoppingItem | null>(null);
+
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Compute live total of all expenses
@@ -42,24 +58,55 @@ export const PartyScreen: React.FC<PartyScreenProps> = ({ onNavigateToResults })
     0
   );
 
-  const handleOpenAdd = () => {
+  const shoppingList = currentParty.shoppingList || [];
+  const boughtItems = shoppingList.filter((item) => item.isBought);
+  const activeShoppingCount = shoppingList.filter((item) => !item.isBought).length;
+
+  const totalShoppingActual = boughtItems.reduce(
+    (sum, item) => sum + (item.actualAmount || item.estimatedAmount || 0),
+    0
+  );
+  const totalShoppingEstimated = shoppingList.reduce(
+    (sum, item) => sum + (item.estimatedAmount || 0),
+    0
+  );
+
+  const handleOpenAddExpense = () => {
     if ((currentParty.participants || []).length === 0) {
-      showToast('Сначала добавьте себя или друга в сбор', { type: 'warning' });
+      showToast('В комнате пока нет участников. Подключите общую комнату по коду.', {
+        type: 'warning',
+      });
       return;
     }
     setEditingItem(null);
     setIsAddModalVisible(true);
   };
 
-  const handleEditItem = (item: ExpenseItem) => {
+  const handleEditExpenseItem = (item: ExpenseItem) => {
     setEditingItem(item);
     setIsAddModalVisible(true);
+  };
+
+  const handleOpenAddShopping = (preset?: (typeof PARTY_PRESETS)[0]) => {
+    setEditingShoppingItem(null);
+    setShoppingPreset(preset || null);
+    setIsAddShoppingModalVisible(true);
+  };
+
+  const handleEditShoppingItem = (item: ShoppingItem) => {
+    setEditingShoppingItem(item);
+    setShoppingPreset(null);
+    setIsAddShoppingModalVisible(true);
+  };
+
+  const handleConvertShoppingItem = (item: ShoppingItem) => {
+    setConvertingShoppingItem(item);
   };
 
   // Pull-to-refresh: Sync with Google Sheets
   const handleRefresh = async () => {
     if (!currentParty.code) {
-      showToast('Свайпните вниз для обновления. Комната не подключена к Google Sheets', {
+      showToast('Комната не подключена к Google Sheets. Создайте или войдите по коду.', {
         type: 'info',
       });
       return;
@@ -77,11 +124,9 @@ export const PartyScreen: React.FC<PartyScreenProps> = ({ onNavigateToResults })
   };
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={[styles.screenContainer, { backgroundColor: theme.colors.background }]}
-    >
+    <View style={styles.screenContainer}>
       <ScrollView
+        style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         refreshControl={
@@ -93,76 +138,148 @@ export const PartyScreen: React.FC<PartyScreenProps> = ({ onNavigateToResults })
           />
         }
       >
-        {/* Cloud Room Status Indicator */}
-        {currentParty.code && (
-          <TouchableOpacity
-            style={[
-              styles.cloudBanner,
-              {
-                backgroundColor: `${theme.colors.neonCyan}12`,
-                borderColor: `${theme.colors.neonCyan}40`,
-              },
-            ]}
-            onPress={() => setIsCloudModalVisible(true)}
-            activeOpacity={0.8}
-          >
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Ionicons
-                name="cloud-done-outline"
-                size={16}
-                color={theme.colors.neonCyan}
-                style={{ marginRight: 6 }}
-              />
-              <Text style={[styles.cloudBannerText, { color: theme.colors.neonCyan }]}>
-                Google Sheets: Комната #{currentParty.code} • авто-обновление
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={14} color={theme.colors.neonCyan} />
-          </TouchableOpacity>
-        )}
-
         {/* Participants Section */}
-        <ParticipantChips />
+        <ParticipantChips onOpenCloud={() => setIsCloudModalVisible(true)} />
 
-        {/* Expenses List Section */}
-        <BillItemList
-          onEditItem={handleEditItem}
-          onOpenAddItem={handleOpenAdd}
-        />
+        {/* Segmented Sub-Tab Switcher */}
+        <View style={styles.tabSwitcher}>
+          <TouchableOpacity
+            style={[styles.tabButton, subTab === 'bill' && styles.tabButtonActive]}
+            onPress={() => setSubTab('bill')}
+            activeOpacity={0.7}
+          >
+            <Ionicons
+              name="receipt-outline"
+              size={16}
+              color={subTab === 'bill' ? theme.colors.textInverse : theme.colors.textSecondary}
+            />
+            <Text
+              style={[
+                styles.tabButtonText,
+                subTab === 'bill' && styles.tabButtonTextActive,
+              ]}
+            >
+              Чек и траты
+            </Text>
+            {(currentParty.expenses || []).length > 0 && (
+              <View
+                style={[
+                  styles.tabBadge,
+                  subTab === 'bill' ? styles.tabBadgeActive : styles.tabBadgeInactive,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.tabBadgeText,
+                    subTab === 'bill'
+                      ? styles.tabBadgeTextActive
+                      : styles.tabBadgeTextInactive,
+                  ]}
+                >
+                  {(currentParty.expenses || []).length}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.tabButton, subTab === 'shopping' && styles.tabButtonActive]}
+            onPress={() => setSubTab('shopping')}
+            activeOpacity={0.7}
+          >
+            <Ionicons
+              name="cart-outline"
+              size={16}
+              color={subTab === 'shopping' ? theme.colors.textInverse : theme.colors.textSecondary}
+            />
+            <Text
+              style={[
+                styles.tabButtonText,
+                subTab === 'shopping' && styles.tabButtonTextActive,
+              ]}
+            >
+              Список покупок
+            </Text>
+            {shoppingList.length > 0 && (
+              <View
+                style={[
+                  styles.tabBadge,
+                  subTab === 'shopping'
+                    ? styles.tabBadgeActive
+                    : styles.tabBadgeInactive,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.tabBadgeText,
+                    subTab === 'shopping'
+                      ? styles.tabBadgeTextActive
+                      : styles.tabBadgeTextInactive,
+                  ]}
+                >
+                  {boughtItems.length}/{shoppingList.length}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {/* Tab Content */}
+        {subTab === 'bill' ? (
+          <BillItemList
+            onEditItem={handleEditExpenseItem}
+            onOpenAddItem={handleOpenAddExpense}
+          />
+        ) : (
+          <ShoppingListView
+            onOpenAddItem={handleOpenAddShopping}
+            onEditItem={handleEditShoppingItem}
+            onConvertItem={handleConvertShoppingItem}
+          />
+        )}
       </ScrollView>
 
-      {/* Sticky Bottom Summary Bar */}
-      <View
-        style={[
-          styles.bottomBar,
-          {
-            backgroundColor: theme.colors.surfaceElevated,
-            borderTopColor: theme.colors.surfaceBorderActive,
-          },
-        ]}
-      >
-        <View style={styles.bottomBarLeft}>
-          <Text style={[styles.bottomBarLabel, { color: theme.colors.textMuted }]}>
-            ОБЩИЕ РАСХОДЫ
-          </Text>
-          <Text style={[styles.bottomBarAmount, { color: theme.colors.primary }]}>
-            {formatRubles(totalExpenses)}
-          </Text>
-          <Text style={[styles.bottomBarHint, { color: theme.colors.textSecondary }]}>
-            {currentParty.expenses?.length || 0} счетов • {currentParty.participants.length} чел.
-          </Text>
-        </View>
+      {/* Docked Bottom Summary Bar */}
+      <View style={styles.bottomBar}>
+        {subTab === 'bill' ? (
+          <View style={styles.bottomBarLeft}>
+            <Text style={styles.bottomBarLabel}>ОБЩИЕ РАСХОДЫ</Text>
+            <AnimatedNumber
+              value={totalExpenses}
+              formatter={formatRubles}
+              style={styles.bottomBarAmount}
+            />
+            <Text style={styles.bottomBarHint} numberOfLines={1}>
+              {currentParty.expenses?.length || 0} счетов • {currentParty.participants.length} чел.
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.bottomBarLeft}>
+            <Text style={styles.bottomBarLabel}>
+              {boughtItems.length > 0 ? 'КУПЛЕНО В ЧЕК' : 'ПРИМЕРНЫЙ БЮДЖЕТ'}
+            </Text>
+            <AnimatedNumber
+              value={boughtItems.length > 0 ? totalShoppingActual : totalShoppingEstimated}
+              formatter={formatRubles}
+              style={[
+                styles.bottomBarAmount,
+                boughtItems.length > 0 && { color: theme.colors.success },
+              ]}
+            />
+            <Text style={styles.bottomBarHint} numberOfLines={1}>
+              {boughtItems.length} из {shoppingList.length} куплено
+              {activeShoppingCount > 0 ? ` • ${activeShoppingCount} осталось` : ' • всё готово!'}
+            </Text>
+          </View>
+        )}
 
         <View style={styles.bottomBarActions}>
           <TouchableOpacity
-            style={[
-              styles.floatingAddBtn,
-              {
-                backgroundColor: theme.colors.primary,
-              },
-            ]}
-            onPress={handleOpenAdd}
+            style={styles.floatingAddBtn}
+            onPress={subTab === 'bill' ? handleOpenAddExpense : () => handleOpenAddShopping()}
             activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel={subTab === 'bill' ? 'Добавить расход' : 'Добавить покупку'}
           >
             <Ionicons name="add" size={24} color={theme.colors.textInverse} />
           </TouchableOpacity>
@@ -175,7 +292,6 @@ export const PartyScreen: React.FC<PartyScreenProps> = ({ onNavigateToResults })
             iconPosition="right"
             onPress={onNavigateToResults}
             disabled={(currentParty.expenses || []).length === 0}
-            style={styles.resultsBtn}
           />
         </View>
       </View>
@@ -190,78 +306,163 @@ export const PartyScreen: React.FC<PartyScreenProps> = ({ onNavigateToResults })
         editItem={editingItem}
       />
 
+      {/* Add / Edit Shopping Item Modal */}
+      <AddShoppingItemModal
+        visible={isAddShoppingModalVisible}
+        onClose={() => {
+          setIsAddShoppingModalVisible(false);
+          setEditingShoppingItem(null);
+          setShoppingPreset(null);
+        }}
+        editItem={editingShoppingItem}
+        initialPreset={shoppingPreset}
+      />
+
+      {/* 1-Click Convert to Expense Modal */}
+      <ConvertShoppingModal
+        visible={Boolean(convertingShoppingItem)}
+        onClose={() => setConvertingShoppingItem(null)}
+        item={convertingShoppingItem}
+      />
+
       {/* Cloud Sync Modal */}
       <CloudSyncModal
         visible={isCloudModalVisible}
         onClose={() => setIsCloudModalVisible(false)}
       />
-    </KeyboardAvoidingView>
+    </View>
   );
 };
 
-const styles = StyleSheet.create({
-  screenContainer: {
-    flex: 1,
-  },
-  scrollContent: {
-    padding: 16,
-    paddingBottom: 110,
-  },
-  cloudBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    marginBottom: 14,
-  },
-  cloudBannerText: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  bottomBar: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    borderTopWidth: 1,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-  },
-  bottomBarLeft: {
-    flex: 1,
-  },
-  bottomBarLabel: {
-    fontSize: 10,
-    fontWeight: '800',
-    letterSpacing: 0.8,
-  },
-  bottomBarAmount: {
-    fontSize: 20,
-    fontWeight: '800',
-    letterSpacing: -0.3,
-  },
-  bottomBarHint: {
-    fontSize: 11,
-  },
-  bottomBarActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  floatingAddBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  resultsBtn: {
-    paddingHorizontal: 18,
-  },
-});
+function createStyles(theme: ThemeTokens) {
+  return StyleSheet.create({
+    screenContainer: {
+      flex: 1,
+      backgroundColor: theme.colors.background,
+    },
+    scrollView: {
+      flex: 1,
+    },
+    scrollContent: {
+      padding: 16,
+      paddingBottom: 40,
+    },
+    tabSwitcher: {
+      flexDirection: 'row',
+      backgroundColor: theme.colors.surfaceElevated,
+      borderRadius: 14,
+      padding: 4,
+      marginBottom: 14,
+      borderWidth: 1,
+      borderColor: theme.colors.surfaceBorder,
+      gap: 4,
+    },
+    tabButton: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: 9,
+      borderRadius: 10,
+      gap: 6,
+    },
+    tabButtonActive: {
+      backgroundColor: theme.colors.primary,
+    },
+    tabButtonText: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: theme.colors.textSecondary,
+    },
+    tabButtonTextActive: {
+      color: theme.colors.textInverse,
+      fontWeight: '800',
+    },
+    tabBadge: {
+      paddingVertical: 1,
+      paddingHorizontal: 6,
+      borderRadius: 10,
+    },
+    tabBadgeActive: {
+      backgroundColor: 'rgba(255, 255, 255, 0.25)',
+    },
+    tabBadgeInactive: {
+      backgroundColor: theme.colors.surfaceBorder,
+    },
+    tabBadgeText: {
+      fontSize: 11,
+      fontWeight: '800',
+    },
+    tabBadgeTextActive: {
+      color: theme.colors.textInverse,
+    },
+    tabBadgeTextInactive: {
+      color: theme.colors.textMuted,
+    },
+    cloudBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      borderRadius: 12,
+      borderWidth: 1,
+      backgroundColor: theme.colors.surfaceElevated,
+      borderColor: theme.colors.surfaceBorder,
+      marginBottom: 14,
+    },
+    cloudBannerText: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: theme.colors.textPrimary,
+    },
+    bottomBar: {
+      backgroundColor: theme.colors.surfaceElevated,
+      borderTopWidth: 1,
+      borderTopColor: theme.colors.surfaceBorderActive,
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingVertical: 10,
+      paddingHorizontal: 16,
+      minHeight: 68,
+    },
+    bottomBarLeft: {
+      flex: 1,
+      marginRight: 10,
+      justifyContent: 'center',
+    },
+    bottomBarLabel: {
+      fontSize: 10,
+      fontWeight: '800',
+      letterSpacing: 0.6,
+      color: theme.colors.textMuted,
+    },
+    bottomBarAmount: {
+      fontSize: 19,
+      fontWeight: '800',
+      letterSpacing: -0.3,
+      color: theme.colors.primary,
+    },
+    bottomBarHint: {
+      fontSize: 11,
+      marginTop: 1,
+      color: theme.colors.textSecondary,
+    },
+    bottomBarActions: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      flexShrink: 0,
+    },
+    floatingAddBtn: {
+      width: 42,
+      height: 42,
+      borderRadius: 21,
+      backgroundColor: theme.colors.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 8,
+    },
+  });
+}
+

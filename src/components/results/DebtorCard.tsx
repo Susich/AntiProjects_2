@@ -1,610 +1,655 @@
-import React, { useMemo, useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  LayoutAnimation,
-  Platform,
-  UIManager,
-  Alert,
-  Linking,
-} from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Animated, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
 import { ThemeTokens, useTheme } from '../../context/ThemeContext';
 import { SimplifiedDebtTransfer } from '../../types';
-import { formatPhone, formatRubles, getInitials } from '../../utils/currency';
-import { copyToClipboard, payToCreditor } from '../../utils/deepLinks';
+import { cleanPhone, formatPhone, formatRubles, getInitials } from '../../utils/currency';
+import { copyToClipboard } from '../../utils/clipboard';
 import { shareSingleTransfer } from '../../utils/shareText';
 import { useToast } from '../common/Toast';
-
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
+import { PressableScale } from '../common/PressableScale';
+import { useNotificationStore } from '../../store/useNotificationStore';
+import { usePartyStore } from '../../store/usePartyStore';
+import { isOperationPendingForTransfer } from '../../api/cloudQueue';
+import { triggerImpact, triggerSuccessHaptic } from '../../utils/haptics';
 
 interface DebtorCardProps {
   transfer: SimplifiedDebtTransfer;
   partyTitle: string;
-  onToggleSettled: (transferId: string) => void;
+  onToggleSettled: (transfer: SimplifiedDebtTransfer) => void;
+  isUpdating?: boolean;
 }
 
 export const DebtorCard: React.FC<DebtorCardProps> = ({
   transfer,
   partyTitle,
   onToggleSettled,
+  isUpdating = false,
 }) => {
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
-  const [isExpanded, setIsExpanded] = useState(false);
   const { showToast } = useToast();
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [badgeScale] = useState(() => new Animated.Value(1));
+  const [checkmarkAnim] = useState(() => new Animated.Value(1));
+  const [pulseAnim] = useState(() => new Animated.Value(1));
+  const [confettiAnim] = useState(() => new Animated.Value(0));
+  const isFirstRender = useRef(true);
 
-  const creditorPhone = transfer.toUser.paymentInfo.phone;
-  const creditorUrl = transfer.toUser.paymentInfo.sbpQrOrUrl;
+  const isSettled = Boolean(transfer.isSettled);
+  const currentPartyId = usePartyStore((s) => s.currentParty.id);
+  const isPendingSync = isOperationPendingForTransfer(currentPartyId, transfer.id) || isUpdating;
 
-  const toggleExpand = () => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setIsExpanded((prev) => !prev);
-  };
+  useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
+    if (isSettled) {
+      void triggerSuccessHaptic();
+    }
+    Animated.parallel([
+      Animated.sequence([
+        Animated.spring(badgeScale, {
+          toValue: 1.25,
+          speed: 35,
+          bounciness: 12,
+          useNativeDriver: true,
+        }),
+        Animated.spring(badgeScale, {
+          toValue: 1,
+          speed: 30,
+          bounciness: 6,
+          useNativeDriver: true,
+        }),
+      ]),
+      Animated.sequence([
+        Animated.spring(checkmarkAnim, {
+          toValue: 1.35,
+          speed: 40,
+          bounciness: 14,
+          useNativeDriver: true,
+        }),
+        Animated.spring(checkmarkAnim, {
+          toValue: 1,
+          speed: 30,
+          bounciness: 6,
+          useNativeDriver: true,
+        }),
+      ]),
+    ]).start();
+  }, [isSettled, badgeScale, checkmarkAnim]);
 
-  // Action 1: "Оплатить" (Pay)
-  const handlePay = async () => {
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    } catch {}
+  useEffect(
+    () => () => {
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+    },
+    []
+  );
 
-    const result = await payToCreditor(transfer.toUser, transfer.amount);
-    if (result.success) {
-      showToast(result.message, {
-        type: 'success',
-        icon: 'flash-outline',
-      });
+  const handleCopyPhone = async () => {
+    const phone = cleanPhone(transfer.toUser.phone);
+    if (!phone) {
+      showToast('Получатель не указал телефон', { type: 'warning' });
       return;
     }
 
-    // The number is already in the clipboard. Offer the last helpful actions:
-    // copy the exact amount and, if a link exists, retry it once more.
-    const buttons: {
-      text: string;
-      style?: 'cancel' | 'default';
-      onPress?: () => void;
-    }[] = [];
-
-    if (creditorUrl) {
-      buttons.push({
-        text: 'Открыть ссылку',
-        onPress: () => {
-          const trimmed = creditorUrl.trim();
-          const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
-            ? trimmed
-            : `https://${trimmed}`;
-          Linking.openURL(url).catch((err) =>
-            console.warn('[SBP] Failed to open payment link:', err)
-          );
-        },
-      });
+    const ok = await copyToClipboard(`+${phone}`);
+    if (!ok) {
+      showToast('Не удалось скопировать номер', { type: 'error' });
+      return;
     }
 
-    buttons.push({
-      text: 'Скопировать сумму',
-      onPress: () => {
-        void copyToClipboard(String(transfer.amount));
-        showToast(`Сумма ${formatRubles(transfer.amount)} скопирована`, {
-          type: 'info',
-          icon: 'copy-outline',
-        });
-      },
-    });
-    buttons.push({ text: 'Понятно', style: 'cancel' });
+    void triggerImpact();
+    setCopied(true);
 
-    Alert.alert('Оплата по СБП', result.message, buttons);
+    // Pulse animation
+    Animated.sequence([
+      Animated.spring(pulseAnim, {
+        toValue: 1.08,
+        speed: 45,
+        bounciness: 12,
+        useNativeDriver: true,
+      }),
+      Animated.spring(pulseAnim, {
+        toValue: 1,
+        speed: 35,
+        bounciness: 6,
+        useNativeDriver: true,
+      }),
+    ]).start();
+
+    // Floating confetti sparkles
+    confettiAnim.setValue(0);
+    Animated.timing(confettiAnim, {
+      toValue: 1,
+      duration: 850,
+      useNativeDriver: true,
+    }).start();
+
+    showToast('Номер телефона скопирован! ✨', {
+      type: 'success',
+      icon: 'checkmark-circle',
+    });
+
+    if (copyTimer.current) clearTimeout(copyTimer.current);
+    copyTimer.current = setTimeout(() => setCopied(false), 2000);
   };
 
-  // Action 2: Share transfer to Debtor
-  const handleShareToDebtor = async () => {
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    } catch {}
-
-    const formattedAmount = formatRubles(transfer.amount);
-    if (creditorPhone) {
-      await copyToClipboard(creditorPhone);
+  const handleShare = async () => {
+    const ok = await shareSingleTransfer(transfer, partyTitle);
+    if (!ok) {
+      showToast('Не удалось открыть меню «Поделиться»', { type: 'info' });
     }
+  };
 
-    showToast(`Реквизиты для перевода ${formattedAmount} скопированы!`, {
-      type: 'info',
-      icon: 'copy-outline',
+  const handleSendReminder = async () => {
+    await useNotificationStore.getState().dispatchNotification('debt_reminder', {
+      partyTitle,
+      amount: transfer.amount,
+      actorName: transfer.toUser.name,
     });
-
-    await shareSingleTransfer(transfer, partyTitle);
+    showToast(`Напоминание для ${transfer.fromUser.name} отправлено!`, { type: 'success' });
   };
 
-  // Action 3: Toggle Settled status
-  const handleToggleSettled = () => {
-    try {
-      Haptics.notificationAsync(
-        transfer.isSettled
-          ? Haptics.NotificationFeedbackType.Warning
-          : Haptics.NotificationFeedbackType.Success
-      );
-    } catch {}
-
-    onToggleSettled(transfer.id);
-    showToast(
-      transfer.isSettled
-        ? `Перевод от ${transfer.fromUser.name} отмечен как ожидающий`
-        : `🎉 Перевод от ${transfer.fromUser.name} на ${formatRubles(transfer.amount)} закрыт!`,
-      { type: transfer.isSettled ? 'info' : 'success' }
-    );
-  };
+  const phone = transfer.toUser.phone ? formatPhone(transfer.toUser.phone) : '';
 
   return (
-    <View
-      style={[
-        styles.cardContainer,
-        transfer.isSettled ? styles.cardSettled : styles.cardUnsettled,
-      ]}
-    >
-      {/* Top Header: [Debtor] transfers [Amount] ₽ ➔ [Creditor] */}
-      <View style={styles.topTransferRow}>
-        {/* Debtor info */}
-        <View style={styles.participantCol}>
+    <View style={[styles.card, isSettled && styles.cardSettled]}>
+      <View style={styles.topRow}>
+        <View style={styles.peopleRow}>
           <View
             style={[
-              styles.avatarCircle,
-              { backgroundColor: transfer.fromUser.avatarColor || theme.colors.neonPink },
+              styles.avatar,
+              {
+                backgroundColor:
+                  transfer.fromUser.avatarColor || theme.colors.secondary,
+              },
             ]}
           >
             <Text style={styles.avatarText}>{getInitials(transfer.fromUser.name)}</Text>
           </View>
-          <Text style={styles.participantName} numberOfLines={1}>
-            {transfer.fromUser.name}
-          </Text>
-          <Text style={styles.roleLabel}>Должник</Text>
+          <View style={styles.peopleInfo}>
+            <Text style={styles.peopleNames} numberOfLines={1}>
+              {transfer.fromUser.name} <Text style={styles.arrow}>→</Text>{' '}
+              {transfer.toUser.name}
+            </Text>
+            <Text style={styles.transferHint}>
+              {isSettled ? 'Перевод отмечен как выполненный' : 'Ожидает перевода'}
+            </Text>
+          </View>
         </View>
-
-        {/* Transfer Center Indicator */}
-        <View style={styles.transferMiddle}>
-          <Text
-            style={[
-              styles.transferAmount,
-              transfer.isSettled && styles.transferAmountSettled,
-            ]}
-          >
+        <View style={styles.amountBlock}>
+          <Text style={[styles.amount, isSettled && styles.amountSettled]}>
             {formatRubles(transfer.amount)}
           </Text>
-          <View style={styles.arrowRow}>
-            <View style={styles.arrowLine} />
-            <Ionicons
-              name="arrow-forward"
-              size={18}
-              color={transfer.isSettled ? theme.colors.success : theme.colors.info}
-            />
-          </View>
-        </View>
-
-        {/* Creditor info */}
-        <View style={styles.participantCol}>
-          <View
-            style={[
-              styles.avatarCircle,
-              { backgroundColor: transfer.toUser.avatarColor || theme.colors.success },
-            ]}
-          >
-            <Text style={styles.avatarText}>{getInitials(transfer.toUser.name)}</Text>
-          </View>
-          <Text style={styles.participantName} numberOfLines={1}>
-            {transfer.toUser.name}
-          </Text>
-          <Text style={[styles.roleLabel, { color: theme.colors.success }]}>
-            Кредитор
-          </Text>
-        </View>
-      </View>
-
-      {/* Creditor Requisites Box */}
-      <View style={styles.requisitesCard}>
-        <View style={styles.requisitesHeader}>
-          <Ionicons
-            name="card-outline"
-            size={14}
-            color={theme.colors.success}
-            style={{ marginRight: 5 }}
-          />
-          <Text style={styles.requisitesTitle}>
-            Реквизиты получателя ({transfer.toUser.name})
-          </Text>
-        </View>
-
-        <View style={styles.requisitesContent}>
-          {/* SBP Badge: no bank selection — payments go through any SBP bank */}
-          <View
-            style={[
-              styles.sbpPill,
-              {
-                backgroundColor: `${theme.colors.info}22`,
-                borderColor: `${theme.colors.info}66`,
-              },
-            ]}
-          >
-            <Ionicons
-              name="flash-outline"
-              size={13}
-              color={theme.colors.info}
-              style={{ marginRight: 4 }}
-            />
-            <Text style={[styles.sbpPillText, { color: theme.colors.info }]}>
-              СБП
-            </Text>
-          </View>
-
-          {/* Phone for SBP */}
-          {creditorPhone ? (
-            <TouchableOpacity
-              onPress={async () => {
-                await copyToClipboard(String(creditorPhone));
-                showToast(`Номер ${formatPhone(creditorPhone)} скопирован!`);
-              }}
-              style={styles.phoneChip}
-              activeOpacity={0.7}
+          <View style={styles.statusPillsRow}>
+            {isPendingSync && (
+              <View style={styles.syncPendingBadge}>
+                <Ionicons name="time-outline" size={11} color={theme.colors.neonCyan} />
+                <Text style={styles.syncPendingText}>В очереди</Text>
+              </View>
+            )}
+            <Animated.View
+              style={[
+                styles.statusPill,
+                isSettled && styles.statusPillPaid,
+                { transform: [{ scale: badgeScale }] },
+              ]}
             >
-              <Ionicons
-                name="call-outline"
-                size={13}
-                color={theme.colors.textPrimary}
-                style={{ marginRight: 4 }}
-              />
-              <Text style={styles.phoneChipText}>{formatPhone(creditorPhone)}</Text>
-              <Ionicons
-                name="copy-outline"
-                size={12}
-                color={theme.colors.textMuted}
-                style={{ marginLeft: 4 }}
-              />
-            </TouchableOpacity>
-          ) : (
-            <Text style={styles.noPhoneHint}>Телефон СБП не указан</Text>
-          )}
+              <Animated.View style={{ transform: [{ scale: checkmarkAnim }] }}>
+                <Ionicons
+                  name={isSettled ? 'checkmark-circle' : 'time-outline'}
+                  size={12}
+                  color={isSettled ? theme.colors.success : theme.colors.warning}
+                />
+              </Animated.View>
+              <Text
+                style={[
+                  styles.statusText,
+                  { color: isSettled ? theme.colors.success : theme.colors.warning },
+                ]}
+              >
+                {isSettled ? 'Оплачено' : 'Ожидает'}
+              </Text>
+            </Animated.View>
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.requisitesBox}>
+        <View style={styles.requisiteRow}>
+          <View style={styles.requisiteIcon}>
+            <Ionicons name="business-outline" size={16} color={theme.colors.primary} />
+          </View>
+          <View style={styles.requisiteInfo}>
+            <Text style={styles.requisiteLabel}>Банк получателя</Text>
+            <Text style={styles.requisiteValue}>{transfer.toUser.bank || 'Не указан'}</Text>
+          </View>
         </View>
 
-        {/* Personal SBP link, if the creditor shared one */}
-        {creditorUrl ? (
-          <View style={styles.urlBadge}>
-            <Ionicons
-              name="link-outline"
-              size={12}
-              color={theme.colors.info}
-              style={{ marginRight: 4 }}
-            />
-            <Text style={styles.urlBadgeText} numberOfLines={1}>
-              {creditorUrl}
+        <View style={styles.requisitesDivider} />
+
+        <View style={styles.requisiteRow}>
+          <View style={styles.requisiteIcon}>
+            <Ionicons name="call-outline" size={16} color={theme.colors.info} />
+          </View>
+          <View style={styles.requisiteInfo}>
+            <Text style={styles.requisiteLabel}>Телефон для перевода</Text>
+            <Text style={[styles.requisiteValue, !phone && styles.requisiteValueMissing]}>
+              {phone || 'Получатель не указал номер'}
             </Text>
           </View>
-        ) : (
-          <Text style={styles.noLinkHint}>
-            СБП-ссылка не указана: «Оплатить» скопирует номер для перевода в вашем банке.
-          </Text>
-        )}
-      </View>
-
-      {/* Accordion Toggle for Explanation */}
-      <TouchableOpacity
-        onPress={toggleExpand}
-        style={styles.expandToggle}
-        activeOpacity={0.7}
-      >
-        <Text style={styles.expandToggleText}>
-          {isExpanded ? 'Скрыть обоснование расчёта' : 'Почему такой расчёт? (Взаимозачёт)'}
-        </Text>
-        <Ionicons
-          name={isExpanded ? 'chevron-up' : 'chevron-down'}
-          size={14}
-          color={theme.colors.textMuted}
-        />
-      </TouchableOpacity>
-
-      {/* Expanded Explanation */}
-      {isExpanded && (
-        <View style={styles.explanationBox}>
-          <Text style={styles.explanationText}>
-            ⚡ Алгоритм сведения долгов (Debt Simplification) подсчитал чистый баланс:
-          </Text>
-          <Text style={styles.explanationBullet}>
-            •{' '}
-            <Text style={styles.explanationName}>{transfer.fromUser.name}</Text> потребил(а)
-            больше, чем оплатил(а) из своего кармана.
-          </Text>
-          <Text style={styles.explanationBullet}>
-            •{' '}
-            <Text style={styles.explanationName}>{transfer.toUser.name}</Text> оплатил(а)
-            общие чеки и ожидает возврат.
-          </Text>
-          <Text style={styles.explanationNote}>
-            Прямой перевод закрывает долг сразу, исключая цепочки промежуточных платежей.
-          </Text>
         </View>
-      )}
-
-      {/* Action Buttons Row */}
-      <View style={styles.actionsRow}>
-        {/* Action 1: Pay */}
-        <TouchableOpacity onPress={handlePay} style={styles.payBtn} activeOpacity={0.8}>
-          <Ionicons
-            name={creditorUrl ? 'open-outline' : 'flash-outline'}
-            size={16}
-            color={theme.colors.textInverse}
-            style={{ marginRight: 6 }}
-          />
-          <Text style={styles.payBtnText}>Оплатить по СБП</Text>
-        </TouchableOpacity>
-
-        {/* Action 2: Share to Debtor */}
-        <TouchableOpacity
-          onPress={handleShareToDebtor}
-          style={styles.shareBtn}
-          activeOpacity={0.8}
-        >
-          <Ionicons name="paper-plane-outline" size={16} color={theme.colors.textPrimary} />
-        </TouchableOpacity>
-
-        {/* Action 3: Quick Toggle Settled */}
-        <TouchableOpacity
-          onPress={handleToggleSettled}
-          style={[styles.settledCheckBtn, transfer.isSettled && styles.settledCheckBtnActive]}
-          activeOpacity={0.8}
-        >
-          <Ionicons
-            name={transfer.isSettled ? 'checkmark-circle' : 'checkmark-circle-outline'}
-            size={22}
-            color={transfer.isSettled ? theme.colors.success : theme.colors.textMuted}
-          />
-        </TouchableOpacity>
       </View>
+
+      <View style={styles.actionsRow}>
+        <Animated.View style={[{ flex: 1 }, { transform: [{ scale: pulseAnim }] }]}>
+          <PressableScale
+            style={[styles.copyButton, copied && styles.copyButtonDone]}
+            onPress={handleCopyPhone}
+            disabled={!phone}
+            accessibilityRole="button"
+            accessibilityLabel="Скопировать номер телефона получателя"
+          >
+            {copied && (
+              <View style={styles.confettiContainer} pointerEvents="none">
+                <Animated.Text
+                  style={[
+                    styles.confettiParticle,
+                    {
+                      left: 10,
+                      opacity: confettiAnim.interpolate({
+                        inputRange: [0, 0.7, 1],
+                        outputRange: [1, 0.8, 0],
+                      }),
+                      transform: [
+                        {
+                          translateY: confettiAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [0, -28],
+                          }),
+                        },
+                        {
+                          translateX: confettiAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [0, -10],
+                          }),
+                        },
+                        {
+                          scale: confettiAnim.interpolate({
+                            inputRange: [0, 0.3, 1],
+                            outputRange: [0.6, 1.2, 0.8],
+                          }),
+                        },
+                      ],
+                    },
+                  ]}
+                >
+                  ✨
+                </Animated.Text>
+                <Animated.Text
+                  style={[
+                    styles.confettiParticle,
+                    {
+                      left: '46%',
+                      opacity: confettiAnim.interpolate({
+                        inputRange: [0, 0.7, 1],
+                        outputRange: [1, 0.8, 0],
+                      }),
+                      transform: [
+                        {
+                          translateY: confettiAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [0, -36],
+                          }),
+                        },
+                        {
+                          scale: confettiAnim.interpolate({
+                            inputRange: [0, 0.3, 1],
+                            outputRange: [0.6, 1.3, 0.7],
+                          }),
+                        },
+                      ],
+                    },
+                  ]}
+                >
+                  🎉
+                </Animated.Text>
+                <Animated.Text
+                  style={[
+                    styles.confettiParticle,
+                    {
+                      right: 12,
+                      opacity: confettiAnim.interpolate({
+                        inputRange: [0, 0.7, 1],
+                        outputRange: [1, 0.8, 0],
+                      }),
+                      transform: [
+                        {
+                          translateY: confettiAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [0, -26],
+                          }),
+                        },
+                        {
+                          translateX: confettiAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [0, 8],
+                          }),
+                        },
+                        {
+                          scale: confettiAnim.interpolate({
+                            inputRange: [0, 0.3, 1],
+                            outputRange: [0.6, 1.1, 0.8],
+                          }),
+                        },
+                      ],
+                    },
+                  ]}
+                >
+                  ⭐
+                </Animated.Text>
+              </View>
+            )}
+
+            <Ionicons
+              name={copied ? 'checkmark-circle' : 'copy-outline'}
+              size={18}
+              color={copied ? theme.colors.success : theme.colors.primary}
+            />
+            <Text
+              style={[
+                styles.copyText,
+                copied && { color: theme.colors.success },
+                !phone && { color: theme.colors.textMuted },
+              ]}
+            >
+              {copied ? 'Скопировано!' : 'Скопировать номер'}
+            </Text>
+          </PressableScale>
+        </Animated.View>
+
+        {!isSettled && (
+          <PressableScale
+            style={styles.remindButton}
+            onPress={handleSendReminder}
+            accessibilityRole="button"
+            accessibilityLabel="Отправить напоминание об оплате"
+          >
+            <Ionicons name="alarm-outline" size={16} color={theme.colors.warning} />
+            <Text style={styles.remindText}>Напомнить</Text>
+          </PressableScale>
+        )}
+
+        <PressableScale
+          style={styles.shareButton}
+          onPress={handleShare}
+          accessibilityRole="button"
+          accessibilityLabel="Поделиться переводом"
+        >
+          <Ionicons name="share-social-outline" size={19} color={theme.colors.textSecondary} />
+        </PressableScale>
+      </View>
+
+      <PressableScale
+        style={[styles.settleButton, isSettled && styles.settleButtonUndo]}
+        onPress={() => onToggleSettled(transfer)}
+        disabled={isUpdating}
+        haptic
+        accessibilityRole="button"
+      >
+        <Ionicons
+          name={isSettled ? 'refresh-outline' : 'checkmark-done-outline'}
+          size={17}
+          color={isSettled ? theme.colors.textSecondary : theme.colors.textInverse}
+        />
+        <Text
+          style={[
+            styles.settleText,
+            isSettled && { color: theme.colors.textSecondary },
+          ]}
+        >
+          {isSettled ? 'Вернуть в ожидание' : 'Отметить оплаченным'}
+        </Text>
+      </PressableScale>
     </View>
   );
 };
 
-const createStyles = (theme: ThemeTokens) =>
-  StyleSheet.create({
-    cardContainer: {
+function createStyles(theme: ThemeTokens) {
+  return StyleSheet.create({
+    card: {
       backgroundColor: theme.colors.surface,
       borderRadius: theme.borderRadius.lg,
-      padding: 16,
-      marginBottom: 12,
-      borderWidth: 1.5,
-      ...theme.shadows.card,
-    },
-    cardUnsettled: {
+      borderWidth: 1,
       borderColor: theme.colors.surfaceBorder,
+      padding: theme.spacing.lg,
+      gap: theme.spacing.md,
     },
     cardSettled: {
-      borderColor: `${theme.colors.success}66`,
-      backgroundColor: theme.colors.surfaceElevated,
+      borderColor: `${theme.colors.success}55`,
+      backgroundColor: `${theme.colors.success}08`,
     },
-    topTransferRow: {
+    topRow: {
       flexDirection: 'row',
+      alignItems: 'flex-start',
       justifyContent: 'space-between',
-      alignItems: 'center',
-      marginBottom: 14,
+      gap: theme.spacing.sm,
     },
-    participantCol: {
+    peopleRow: {
+      flexDirection: 'row',
       alignItems: 'center',
-      width: 80,
+      gap: theme.spacing.sm,
+      flex: 1,
     },
-    avatarCircle: {
-      width: 44,
-      height: 44,
-      borderRadius: 22,
+    avatar: {
+      width: 42,
+      height: 42,
+      borderRadius: 21,
       alignItems: 'center',
       justifyContent: 'center',
-      marginBottom: 6,
     },
     avatarText: {
       color: theme.colors.textInverse,
+      fontSize: 14,
       fontWeight: '800',
-      fontSize: 15,
     },
-    participantName: {
+    peopleInfo: {
+      flex: 1,
+    },
+    peopleNames: {
+      color: theme.colors.textPrimary,
       fontSize: 14,
       fontWeight: '700',
-      color: theme.colors.textPrimary,
-      textAlign: 'center',
     },
-    roleLabel: {
-      fontSize: 10,
-      fontWeight: '600',
+    arrow: {
       color: theme.colors.textMuted,
-      marginTop: 1,
     },
-    transferMiddle: {
-      flex: 1,
-      alignItems: 'center',
-      paddingHorizontal: 8,
-    },
-    transferAmount: {
-      fontSize: 22,
-      fontWeight: '900',
-      color: theme.colors.success,
-      letterSpacing: -0.4,
-    },
-    transferAmountSettled: {
-      color: theme.colors.success,
-      opacity: 0.9,
-    },
-    arrowRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      width: '80%',
-      justifyContent: 'center',
+    transferHint: {
+      color: theme.colors.textMuted,
+      fontSize: 11,
       marginTop: 2,
     },
-    arrowLine: {
-      flex: 1,
-      height: 1.5,
-      backgroundColor: `${theme.colors.info}4D`,
-      marginRight: 4,
+    amountBlock: {
+      alignItems: 'flex-end',
+      gap: 4,
     },
-    requisitesCard: {
+    amount: {
+      color: theme.colors.textPrimary,
+      fontSize: 18,
+      fontWeight: '800',
+    },
+    amountSettled: {
+      color: theme.colors.success,
+    },
+    statusPillsRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+    },
+    syncPendingBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 3,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: theme.borderRadius.full,
+      backgroundColor: `${theme.colors.neonCyan}18`,
+      borderWidth: 1,
+      borderColor: `${theme.colors.neonCyan}40`,
+    },
+    syncPendingText: {
+      fontSize: 9,
+      fontWeight: '700',
+      color: theme.colors.neonCyan,
+    },
+    statusPill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 3,
+      backgroundColor: `${theme.colors.warning}16`,
+      paddingHorizontal: 7,
+      paddingVertical: 3,
+      borderRadius: theme.borderRadius.full,
+    },
+    statusPillPaid: {
+      backgroundColor: `${theme.colors.success}16`,
+    },
+    statusText: {
+      fontSize: 10,
+      fontWeight: '700',
+    },
+    requisitesBox: {
       backgroundColor: theme.colors.surfaceElevated,
       borderRadius: theme.borderRadius.md,
-      padding: 10,
-      marginBottom: 10,
       borderWidth: 1,
       borderColor: theme.colors.surfaceBorder,
+      paddingHorizontal: theme.spacing.md,
     },
-    requisitesHeader: {
+    requisiteRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      marginBottom: 8,
+      gap: theme.spacing.sm,
+      paddingVertical: 10,
     },
-    requisitesTitle: {
-      fontSize: 12,
-      fontWeight: '600',
-      color: theme.colors.textSecondary,
-    },
-    requisitesContent: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      flexWrap: 'wrap',
-      gap: 8,
-    },
-    sbpPill: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingHorizontal: 8,
-      paddingVertical: 3,
-      borderRadius: theme.borderRadius.full,
-      borderWidth: 1,
-    },
-    sbpPillText: {
-      fontSize: 11,
-      fontWeight: '700',
-    },
-    noLinkHint: {
-      fontSize: 10,
-      lineHeight: 14,
-      color: theme.colors.textMuted,
-      marginTop: 6,
-    },
-    phoneChip: {
-      flexDirection: 'row',
-      alignItems: 'center',
+    requisiteIcon: {
+      width: 30,
+      height: 30,
+      borderRadius: 9,
       backgroundColor: theme.colors.surface,
-      paddingHorizontal: 8,
-      paddingVertical: 3,
-      borderRadius: theme.borderRadius.full,
-      borderWidth: 1,
-      borderColor: theme.colors.surfaceBorder,
-    },
-    phoneChipText: {
-      fontSize: 12,
-      fontWeight: '600',
-      color: theme.colors.textPrimary,
-    },
-    noPhoneHint: {
-      fontSize: 11,
-      color: theme.colors.textMuted,
-      fontStyle: 'italic',
-    },
-    urlBadge: {
-      flexDirection: 'row',
       alignItems: 'center',
-      marginTop: 6,
-      paddingTop: 6,
-      borderTopWidth: 1,
-      borderTopColor: theme.colors.surfaceBorder,
+      justifyContent: 'center',
     },
-    urlBadgeText: {
-      fontSize: 11,
-      color: theme.colors.info,
+    requisiteInfo: {
       flex: 1,
     },
-    expandToggle: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingVertical: 6,
-      marginBottom: 10,
-    },
-    expandToggleText: {
-      fontSize: 11,
+    requisiteLabel: {
       color: theme.colors.textMuted,
-      fontWeight: '500',
-    },
-    explanationBox: {
-      backgroundColor: theme.colors.background,
-      borderRadius: theme.borderRadius.sm,
-      padding: 10,
-      marginBottom: 10,
-      borderWidth: 1,
-      borderColor: theme.colors.surfaceBorder,
-    },
-    explanationText: {
-      fontSize: 11,
-      color: theme.colors.textSecondary,
-      marginBottom: 4,
+      fontSize: 10,
       fontWeight: '600',
     },
-    explanationBullet: {
-      fontSize: 11,
-      color: theme.colors.textSecondary,
-      marginBottom: 2,
-      lineHeight: 16,
-    },
-    explanationName: {
+    requisiteValue: {
       color: theme.colors.textPrimary,
+      fontSize: 14,
       fontWeight: '700',
+      marginTop: 1,
     },
-    explanationNote: {
-      fontSize: 10,
-      color: theme.colors.info,
-      marginTop: 4,
-      fontStyle: 'italic',
+    requisiteValueMissing: {
+      color: theme.colors.warning,
+      fontSize: 12,
+      fontWeight: '500',
+    },
+    requisitesDivider: {
+      height: 1,
+      backgroundColor: theme.colors.surfaceBorder,
+      marginLeft: 38,
     },
     actionsRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 8,
-      marginTop: 4,
+      gap: theme.spacing.sm,
     },
-    payBtn: {
+    copyButton: {
       flex: 1,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
-      backgroundColor: theme.colors.primary,
-      borderRadius: theme.borderRadius.md,
+      gap: 7,
       paddingVertical: 10,
-      paddingHorizontal: 12,
-      ...theme.shadows.neonGreen,
+      borderRadius: theme.borderRadius.md,
+      borderWidth: 1,
+      borderColor: `${theme.colors.primary}66`,
+      backgroundColor: `${theme.colors.primary}12`,
     },
-    payBtnText: {
-      color: theme.colors.textInverse,
+    copyButtonDone: {
+      borderColor: `${theme.colors.success}66`,
+      backgroundColor: `${theme.colors.success}12`,
+    },
+    copyText: {
+      color: theme.colors.primary,
       fontSize: 13,
       fontWeight: '700',
     },
-    shareBtn: {
-      width: 44,
-      height: 42,
+    remindButton: {
+      flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
-      backgroundColor: theme.colors.surfaceElevated,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
       borderRadius: theme.borderRadius.md,
+      borderWidth: 1,
+      borderColor: `${theme.colors.warning}50`,
+      backgroundColor: `${theme.colors.warning}14`,
+      gap: 5,
+    },
+    remindText: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: theme.colors.warning,
+    },
+    shareButton: {
+      width: 42,
+      height: 40,
+      borderRadius: theme.borderRadius.md,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1,
+      borderColor: theme.colors.surfaceBorder,
+      backgroundColor: theme.colors.surfaceElevated,
+    },
+    settleButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 7,
+      paddingVertical: 11,
+      borderRadius: theme.borderRadius.md,
+      backgroundColor: theme.colors.primary,
+    },
+    settleButtonUndo: {
+      backgroundColor: theme.colors.surfaceElevated,
       borderWidth: 1,
       borderColor: theme.colors.surfaceBorder,
     },
-    settledCheckBtn: {
-      width: 44,
-      height: 42,
-      alignItems: 'center',
-      justifyContent: 'center',
-      backgroundColor: theme.colors.surfaceElevated,
-      borderRadius: theme.borderRadius.md,
-      borderWidth: 1,
-      borderColor: theme.colors.surfaceBorder,
+    settleText: {
+      color: theme.colors.textInverse,
+      fontSize: 13,
+      fontWeight: '800',
     },
-    settledCheckBtnActive: {
-      borderColor: theme.colors.success,
-      backgroundColor: `${theme.colors.success}1A`,
+    confettiContainer: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      overflow: 'visible',
+      zIndex: 99,
+    },
+    confettiParticle: {
+      position: 'absolute',
+      fontSize: 15,
     },
   });
+}

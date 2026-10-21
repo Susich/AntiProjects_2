@@ -1,16 +1,19 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
-  TouchableOpacity,
+  Animated,
+  Pressable,
   Text,
   StyleSheet,
   ActivityIndicator,
   ViewStyle,
   TextStyle,
   View,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import * as Haptics from 'expo-haptics';
 import { ThemeTokens, useTheme } from '../../context/ThemeContext';
+
+import { triggerImpact } from '../../utils/haptics';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'outline' | 'danger' | 'ghost' | 'neon';
 export type ButtonSize = 'sm' | 'md' | 'lg';
@@ -29,6 +32,8 @@ interface ButtonProps {
   haptic?: boolean;
 }
 
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
 export const Button: React.FC<ButtonProps> = ({
   title,
   onPress,
@@ -44,16 +49,33 @@ export const Button: React.FC<ButtonProps> = ({
 }) => {
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
+  const [scaleAnim] = useState(() => new Animated.Value(1));
+
+  const handlePressIn = () => {
+    if (disabled || loading) return;
+    if (haptic) {
+      void triggerImpact();
+    }
+    Animated.spring(scaleAnim, {
+      toValue: 0.95,
+      tension: 260,
+      friction: 12,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const handlePressOut = () => {
+    if (disabled || loading) return;
+    Animated.spring(scaleAnim, {
+      toValue: 1,
+      tension: 200,
+      friction: 10,
+      useNativeDriver: true,
+    }).start();
+  };
 
   const handlePress = () => {
     if (disabled || loading) return;
-    if (haptic) {
-      try {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      } catch {
-        // Haptics may not be supported on all environments
-      }
-    }
     onPress();
   };
 
@@ -121,32 +143,37 @@ export const Button: React.FC<ButtonProps> = ({
   };
 
   const iconElement = icon ? (
-    <Ionicons
-      name={icon}
-      size={size === 'sm' ? 16 : size === 'lg' ? 22 : 18}
-      color={getIconColor()}
-      style={iconPosition === 'left' ? styles.iconLeft : styles.iconRight}
-    />
+    <View style={iconPosition === 'left' ? styles.iconLeft : styles.iconRight}>
+      <Ionicons
+        name={icon}
+        size={size === 'sm' ? 16 : size === 'lg' ? 22 : 18}
+        color={getIconColor()}
+      />
+    </View>
   ) : null;
 
   return (
-    <TouchableOpacity
-      activeOpacity={0.82}
+    <AnimatedPressable
       onPress={handlePress}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
       disabled={disabled || loading}
+      accessibilityRole="button"
+      accessibilityLabel={title}
       style={[
         styles.baseBtn,
         getContainerStyle(),
         getSizeStyle(),
         disabled && styles.disabledBtn,
         style,
+        { transform: [{ scale: scaleAnim }] },
       ]}
     >
       {loading ? (
         <ActivityIndicator
           color={
             variant === 'primary' || variant === 'neon'
-              ? theme.colors.textInverse
+              ? theme.colors.textInverse || '#FFFFFF'
               : theme.colors.textPrimary
           }
           size="small"
@@ -155,6 +182,8 @@ export const Button: React.FC<ButtonProps> = ({
         <View style={styles.contentRow}>
           {iconPosition === 'left' && iconElement}
           <Text
+            numberOfLines={1}
+            ellipsizeMode="tail"
             style={[
               styles.baseText,
               getTextStyle(),
@@ -169,7 +198,7 @@ export const Button: React.FC<ButtonProps> = ({
           {iconPosition === 'right' && iconElement}
         </View>
       )}
-    </TouchableOpacity>
+    </AnimatedPressable>
   );
 };
 
@@ -180,21 +209,44 @@ const createStyles = (theme: ThemeTokens) =>
       alignItems: 'center',
       justifyContent: 'center',
       flexDirection: 'row',
+      minHeight: 44,
+      ...(Platform.OS === 'web'
+        ? ({
+            display: 'inline-flex',
+            userSelect: 'none',
+          } as any)
+        : {}),
     },
     contentRow: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
+      maxWidth: '100%',
+      flexShrink: 0,
     },
     baseText: {
-      fontWeight: '600',
+      fontWeight: '700',
       fontSize: 15,
+      textAlign: 'center',
+      letterSpacing: 0.2,
+      ...(Platform.OS === 'web'
+        ? ({
+            whiteSpace: 'nowrap',
+            userSelect: 'none',
+          } as any)
+        : {}),
     },
     iconLeft: {
       marginRight: 8,
+      flexShrink: 0,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
     iconRight: {
       marginLeft: 8,
+      flexShrink: 0,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
 
     // Sizes

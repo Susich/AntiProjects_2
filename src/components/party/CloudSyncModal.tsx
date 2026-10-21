@@ -1,955 +1,1123 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Modal,
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
+  ActivityIndicator,
   Alert,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  TouchableWithoutFeedback,
+  View,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { usePartyStore } from '../../store/usePartyStore';
-import { useTheme } from '../../context/ThemeContext';
+import { ThemeTokens, useTheme } from '../../context/ThemeContext';
 import {
+  createPartyInCloud,
+  DEFAULT_GOOGLE_SCRIPT_URL,
   getGoogleScriptUrl,
+  joinPartyInCloud,
+  PartyApiResponse,
   setGoogleScriptUrl,
   testGoogleScriptConnection,
-  createPartyInCloud,
-  joinPartyInCloud,
-  syncPartyMembersInCloud,
-  addExpenseToCloud,
 } from '../../api/googleSheets';
-import { ParticipantProfile } from '../../types';
-import { mergeCloudParty, mergeUniqueIds, toCloudMember } from '../../utils/cloudSync';
-import { cleanPhone } from '../../utils/currency';
+import { mapCloudExpenses, mapCloudParticipants } from '../../utils/cloudSync';
+import { copyToClipboard } from '../../utils/clipboard';
 import { Input } from '../common/Input';
 import { Button } from '../common/Button';
-import { IdentityGateForm } from '../profile/IdentityGateModal';
-import { copyToClipboard } from '../../utils/deepLinks';
+import { BankPicker } from '../common/BankPicker';
+import { BottomSheetModal } from '../common/BottomSheetModal';
 import { useToast } from '../common/Toast';
+import { isNetworkOnline } from '../../services/networkService';
+
+type CloudTab = 'room' | 'create' | 'join' | 'settings';
+type BankAction = 'create' | 'join';
 
 interface CloudSyncModalProps {
   visible: boolean;
   onClose: () => void;
 }
 
-type CloudTab = 'room' | 'join' | 'settings';
+const TABS: { id: CloudTab; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+  { id: 'room', label: 'Комната', icon: 'people-outline' },
+  { id: 'create', label: 'Создать', icon: 'add-circle-outline' },
+  { id: 'join', label: 'Войти', icon: 'enter-outline' },
+  { id: 'settings', label: 'Настройки', icon: 'settings-outline' },
+];
 
-export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
-  visible,
-  onClose,
-}) => (
-  <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-    {visible ? <CloudSyncContent onClose={onClose} /> : null}
-  </Modal>
+export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({ visible, onClose }) => (
+  <BottomSheetModal
+    visible={visible}
+    onClose={onClose}
+    height="88%"
+    maxHeight="92%"
+  >
+    {({ onScroll }) => <CloudSyncContent onClose={onClose} onScroll={onScroll} />}
+  </BottomSheetModal>
 );
 
-const CloudSyncContent: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+const CloudSyncContent: React.FC<{
+  onClose: () => void;
+  onScroll?: (e: NativeSyntheticEvent<NativeScrollEvent>) => void;
+}> = ({ onClose, onScroll }) => {
   const { theme } = useTheme();
-  const insets = useSafeAreaInsets();
-  const currentParty = usePartyStore((s) => s.currentParty);
-  const savedProfiles = usePartyStore((s) => s.savedProfiles);
-  const myProfileId = usePartyStore((s) => s.myProfileId);
-  const addProfile = usePartyStore((s) => s.addProfile);
-  const updateProfile = usePartyStore((s) => s.updateProfile);
-  const setMyProfile = usePartyStore((s) => s.setMyProfile);
-  const addParticipantToParty = usePartyStore((s) => s.addParticipantToParty);
-  const syncPartyFromCloud = usePartyStore((s) => s.syncPartyFromCloud);
-  const syncWithCloud = usePartyStore((s) => s.syncWithCloud);
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const { showToast } = useToast();
 
-  const [activeTab, setActiveTab] = useState<CloudTab>('room');
-  const [scriptUrl, setScriptUrlInput] = useState('');
-  const [roomCodeInput, setRoomCodeInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [testResult, setTestResult] = useState<{
-    success?: boolean;
-    message?: string;
-  } | null>(null);
-  const [showGuide, setShowGuide] = useState(false);
-  const [isIdentityGateVisible, setIsIdentityGateVisible] = useState(false);
-  const [pendingAction, setPendingAction] = useState<'create' | 'join' | null>(
-    null
-  );
+  const session = usePartyStore((s) => s.session);
+  const currentParty = usePartyStore((s) => s.currentParty);
+  const lastCloudSyncAt = usePartyStore((s) => s.lastCloudSyncAt);
+  const syncPartyFromCloud = usePartyStore((s) => s.syncPartyFromCloud);
+  const syncWithCloud = usePartyStore((s) => s.syncWithCloud);
+  const saveCurrentPartyToHistory = usePartyStore((s) => s.saveCurrentPartyToHistory);
+  const leaveParty = usePartyStore((s) => s.leaveParty);
 
-  const myProfile =
-    savedProfiles.find((profile) => profile.id === myProfileId) || null;
-  const myProfileIsComplete = Boolean(
-    myProfile?.name.trim() && cleanPhone(myProfile?.paymentInfo?.phone).length >= 10
+  const [activeTab, setActiveTab] = useState<CloudTab>(
+    currentParty.code ? 'room' : 'create'
   );
+  const [createTitle, setCreateTitle] = useState(
+    currentParty.code || currentParty.title === 'Тусовка'
+      ? 'Новая тусовка'
+      : currentParty.title
+  );
+  const [joinCode, setJoinCode] = useState('');
+  const [scriptUrl, setScriptUrl] = useState(DEFAULT_GOOGLE_SCRIPT_URL);
+  const [bankStep, setBankStep] = useState<BankAction | null>(null);
+  const [selectedBank, setSelectedBank] = useState(session?.user.bank || 'Сбербанк');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
 
-  // The modal body is mounted on every open, so local state (test result,
-  // room code input) already starts clean. Only async URL loading is needed.
   useEffect(() => {
-    let cancelled = false;
-    getGoogleScriptUrl().then((url) => {
-      if (cancelled) return;
-      setScriptUrlInput(url);
-      if (!url) {
-        setActiveTab('settings');
-      }
+    let active = true;
+    void getGoogleScriptUrl().then((url) => {
+      if (active) setScriptUrl(url);
     });
     return () => {
-      cancelled = true;
+      active = false;
     };
   }, []);
 
-  // Save URL and Test Ping
-  const handleSaveAndTestUrl = async () => {
-    const trimmed = scriptUrl.trim();
-    if (!trimmed) {
-      showToast('Введите URL Google Apps Script', { type: 'warning' });
+  const auth = session
+    ? { userId: session.user.id, token: session.token }
+    : null;
+
+  const archiveCurrentRoom = () => {
+    if ((currentParty.expenses || []).length > 0) {
+      saveCurrentPartyToHistory();
+    }
+  };
+
+  const applyCloudParty = (res: PartyApiResponse) => {
+    if (!res.party) return;
+    const participants = mapCloudParticipants(res);
+    const expenses = mapCloudExpenses(res.expenses);
+    const settledTransferIds = (res.paymentStatuses || [])
+      .filter((status) => status.isPaid)
+      .map((status) => status.transferId);
+
+    syncPartyFromCloud({
+      id: res.party.id,
+      code: res.party.code,
+      title: res.party.title,
+      createdBy: res.party.createdBy || session?.user.id,
+      date: res.party.createdAt || new Date().toISOString(),
+      participants,
+      expenses,
+      settledTransferIds,
+      deletedExpenseIds: [],
+      pendingExpenseIds: [],
+    });
+  };
+
+  const startBankStep = (action: BankAction) => {
+    setError('');
+    if (!auth) {
+      setError('Требуется авторизация');
       return;
     }
 
-    setIsLoading(true);
-    setTestResult(null);
-    await setGoogleScriptUrl(trimmed);
-
-    const res = await testGoogleScriptConnection(trimmed);
-    setIsLoading(false);
-    setTestResult(res);
-
-    if (res.success) {
-      showToast('Связь с Google Sheets установлена!', { type: 'success' });
-    } else {
-      showToast('Ошибка подключения', { type: 'error' });
-    }
-  };
-
-  // Every create/join starts with the identity gate. The name and phone become
-  // the member's shared SBP requisites; the room never has anonymous members.
-  const handleRequestCreateRoom = async () => {
-    const url = await getGoogleScriptUrl();
-    if (!url) {
-      showToast('Сначала настройте URL Google Apps Script', { type: 'warning' });
-      setActiveTab('settings');
-      return;
-    }
-
-    setPendingAction('create');
-    setIsIdentityGateVisible(true);
-  };
-
-  const handleRequestJoinRoom = async () => {
-    const code = roomCodeInput.trim().toUpperCase();
-    if (!code || code.length < 4) {
-      showToast('Введите 6-значный код комнаты', { type: 'warning' });
-      return;
-    }
-
-    const url = await getGoogleScriptUrl();
-    if (!url) {
-      showToast('Сначала настройте URL Google Apps Script', { type: 'warning' });
-      setActiveTab('settings');
-      return;
-    }
-
-    setPendingAction('join');
-    setIsIdentityGateVisible(true);
-  };
-
-  const handleIdentitySave = (data: Omit<ParticipantProfile, 'id'>) => {
-    let self: ParticipantProfile;
-
-    if (myProfile) {
-      self = {
-        ...myProfile,
-        ...data,
-        paymentInfo: { ...data.paymentInfo },
-      };
-      updateProfile(myProfile.id, data);
-      setMyProfile(myProfile.id);
-    } else {
-      self = addProfile(data);
-      setMyProfile(self.id);
-    }
-
-    const action = pendingAction;
-    const code = roomCodeInput.trim().toUpperCase();
-    setPendingAction(null);
-    setIsIdentityGateVisible(false);
-
-    if (action === 'create') {
-      addParticipantToParty(self.id);
-      void performCreateRoom(self);
-    } else if (action === 'join') {
-      void performJoinRoom(self, code);
-    }
-  };
-
-  const handleIdentityCancel = () => {
-    setIsIdentityGateVisible(false);
-    setPendingAction(null);
-  };
-
-  // Create Cloud Room
-  const performCreateRoom = async (user: ParticipantProfile) => {
-    // Read fresh state: the identity gate may have just added the user.
-    const state = usePartyStore.getState();
-    const latestParty = state.currentParty;
-    const latestProfiles = state.savedProfiles;
-
-    setIsLoading(true);
-    const res = await createPartyInCloud(latestParty.title || 'Тусовка', user);
-
-    if (!res.success || !res.party) {
-      setIsLoading(false);
-      Alert.alert(
-        'Ошибка создания комнаты',
-        res.error || 'Проверьте URL скрипта и права доступа'
+    if (!isNetworkOnline()) {
+      setError(
+        action === 'create'
+          ? 'Для создания новой общей комнаты требуется подключение к интернету.'
+          : 'Для подключения к новой комнате требуется подключение к интернету.'
       );
       return;
     }
 
-    const { id: partyId, code, title } = res.party;
-
-    // Push every local participant profile and every local expense BEFORE the
-    // cloud becomes the source of truth, keeping the same expense ids so
-    // edits/deletes match on all devices afterwards.
-    const memberProfiles = (latestParty.participants || [])
-      .map((participantId) => latestProfiles.find((p) => p.id === participantId))
-      .filter(Boolean) as ParticipantProfile[];
-    let serverOutdated = false;
-    if (memberProfiles.length > 0) {
-      const membersRes = await syncPartyMembersInCloud(
-        partyId,
-        memberProfiles.map(toCloudMember)
-      );
-      if (!membersRes.success && /старой версии/i.test(membersRes.error || '')) {
-        serverOutdated = true;
-      }
+    if (action === 'create' && createTitle.trim().length < 2) {
+      setError('Введите название комнаты');
+      return;
     }
-    for (const expense of latestParty.expenses || []) {
-      await addExpenseToCloud(partyId, {
-        id: expense.id,
-        title: expense.title,
-        amount: expense.amount,
-        paidById: expense.paidById,
-        sharedUserIds: (expense.splitBetween || []).map((s) => s.userId),
-        category: expense.category,
-      });
+    if (action === 'join' && joinCode.replace(/\s/g, '').length < 4) {
+      setError('Введите код комнаты');
+      return;
     }
 
-    // Remember the room locally right away, keeping local participants and
-    // expenses visible until the confirmatory sync below finishes.
-    const created = mergeCloudParty(latestParty, res);
-    if (created) {
-      syncPartyFromCloud(
-        {
-          ...created.party,
-          id: partyId,
-          code,
-          title,
-          participants: mergeUniqueIds(
-            latestParty.participants,
-            created.party.participants
-          ),
-          expenses: latestParty.expenses,
-          // If a push above failed, keep those cheques tracked so the next
-          // background sync uploads them again instead of losing them.
-          pendingExpenseIds: (latestParty.expenses || []).map((expense) => expense.id),
-        },
-        created.profiles
-      );
-    }
-
-    // Re-read the sheet: it is the shared source of truth from now on.
-    const sync = await syncWithCloud();
-    setIsLoading(false);
-    setActiveTab('room');
-
-    if (sync.success) {
-      showToast(`Комната создана! Код: ${code}`, { type: 'success' });
-    } else {
-      showToast(`Комната создана (код ${code}), но данные не догрузились`, {
-        type: 'warning',
-      });
-    }
-
-    if (serverOutdated) {
-      Alert.alert(
-        'Обновите серверную часть',
-        'Комната создана, но Google Apps Script ещё старой версии: участники и изменения чеков не будут синхронизироваться. Скопируйте актуальный backend/Code.gs в редактор Apps Script и сделайте новое развёртывание (Deploy → Manage deployments → Edit → New version).'
-      );
-    }
+    setSelectedBank(session?.user.bank || 'Сбербанк');
+    setBankStep(action);
   };
 
-  // Join Existing Room by Code
-  const performJoinRoom = async (user: ParticipantProfile, code: string) => {
-    setIsLoading(true);
-    const res = await joinPartyInCloud(code, user);
+  const handleConfirmBank = async () => {
+    if (!auth || !bankStep || busy) return;
 
-    if (res.success && res.party) {
-      // The server response already contains the actual member list.
-      const latestParty = usePartyStore.getState().currentParty;
-      const merged = mergeCloudParty(latestParty, res);
-      if (merged) {
-        syncPartyFromCloud(
-          {
-            ...merged.party,
-            participants: mergeUniqueIds(merged.party.participants, [user.id]),
-          },
-          merged.profiles
+    if (!isNetworkOnline()) {
+      setError('Отсутствует подключение к интернету. Проверьте сеть и повторите попытку.');
+      return;
+    }
+
+    setBusy(true);
+    setError('');
+
+    try {
+      if (bankStep === 'create') {
+        const res = await createPartyInCloud(
+          createTitle.trim() || 'Новая тусовка',
+          auth,
+          selectedBank
         );
-      }
-      setIsLoading(false);
+        if (!res.success || !res.party) {
+          setError(res.error || 'Не удалось создать комнату');
+          return;
+        }
 
-      showToast(`Вы присоединились к тусовке «${res.party.title}»!`, {
-        type: 'success',
-      });
-      onClose();
-    } else {
-      setIsLoading(false);
-      Alert.alert(
-        'Не удалось подключиться к комнате',
-        res.error || 'Проверьте правильность кода'
+        archiveCurrentRoom();
+        applyCloudParty(res);
+        setBankStep(null);
+        setActiveTab('room');
+        showToast(`Комната #${res.party.code} создана`, { type: 'success' });
+      } else {
+        const code = joinCode.trim().toUpperCase();
+        const res = await joinPartyInCloud(code, auth, selectedBank);
+        if (!res.success || !res.party) {
+          setError(res.error || 'Не удалось войти в комнату');
+          return;
+        }
+
+        archiveCurrentRoom();
+        applyCloudParty(res);
+        setBankStep(null);
+        setActiveTab('room');
+        showToast(`Вы вошли в комнату #${res.party.code}`, { type: 'success' });
+      }
+    } catch (err: any) {
+      setError(
+        !isNetworkOnline()
+          ? 'Отсутствует подключение к интернету. Проверьте соединение и повторите попытку.'
+          : (err?.message || 'Ошибка сети')
       );
+    } finally {
+      setBusy(false);
     }
   };
 
-  // Sync Party from Cloud
-  const handleSyncCurrentParty = async () => {
-    if (!currentParty.code) {
-      showToast('Комната ещё не создана в облаке', { type: 'info' });
+  const handleCopyCode = async () => {
+    if (!currentParty.code) return;
+    const ok = await copyToClipboard(currentParty.code);
+    if (!ok) {
+      showToast('Не удалось скопировать код', { type: 'error' });
       return;
     }
+    setCopiedCode(true);
+    setTimeout(() => setCopiedCode(false), 2000);
+  };
 
-    setIsLoading(true);
+  const handleSync = async () => {
+    if (busy) return;
+    if (!isNetworkOnline()) {
+      showToast('Оффлайн-режим: синхронизация выполнится автоматически при появлении сети', {
+        type: 'info',
+      });
+      return;
+    }
+    setBusy(true);
     const res = await syncWithCloud();
-    setIsLoading(false);
-
-    if (res.success) {
-      showToast('Данные синхронизированы с Google Sheets!', {
-        type: 'success',
-      });
-    } else {
-      showToast(res.error || 'Ошибка синхронизации', { type: 'error' });
-    }
+    setBusy(false);
+    showToast(
+      res.success ? 'Данные комнаты обновлены' : res.error || 'Ошибка синхронизации',
+      { type: res.success ? 'success' : 'error' }
+    );
   };
 
-  // Copy Room Code
-  const handleCopyCode = async () => {
-    if (currentParty.code) {
-      await copyToClipboard(currentParty.code);
-      showToast(`Код ${currentParty.code} скопирован в буфер!`, {
-        type: 'success',
-      });
-    }
-  };
-
-  return (
-    <View
-        style={[
-          styles.overlay,
-          {
-            backgroundColor: theme.colors.overlay,
-            paddingTop: Math.max(insets.top, 16),
-            paddingBottom: Math.max(insets.bottom, 16),
+  const handleLeave = () => {
+    Alert.alert(
+      'Покинуть комнату?',
+      'Вы перестанете получать обновления этого сбора. Локальный чек будет очищен.',
+      [
+        { text: 'Отмена', style: 'cancel' },
+        {
+          text: 'Покинуть',
+          style: 'destructive',
+          onPress: () => {
+            archiveCurrentRoom();
+            // Optimistic leave: close modal instantly and return to main screen with zero lag
+            onClose();
+            void leaveParty();
+            showToast('Вы вышли из комнаты', { type: 'info' });
           },
-        ]}
-      >
-        <View
-          style={[
-            styles.modalContainer,
-            {
-              backgroundColor: theme.colors.surfaceElevated,
-              borderColor: theme.colors.surfaceBorderActive,
-            },
-          ]}
+        },
+      ]
+    );
+  };
+
+  const handleTestConnection = async () => {
+    setTesting(true);
+    const result = await testGoogleScriptConnection(scriptUrl);
+    setTesting(false);
+    showToast(result.message, { type: result.success ? 'success' : 'error', duration: 5000 });
+  };
+
+  const handleSaveUrl = async () => {
+    await setGoogleScriptUrl(scriptUrl.trim());
+    const resolved = await getGoogleScriptUrl();
+    setScriptUrl(resolved);
+    showToast('URL Google Apps Script сохранён', { type: 'success' });
+  };
+
+  const handleResetUrl = async () => {
+    await setGoogleScriptUrl('');
+    setScriptUrl(DEFAULT_GOOGLE_SCRIPT_URL);
+    showToast('Восстановлен стандартный URL', { type: 'info' });
+  };
+
+  const renderErrorBox = (retryFn?: () => void) => {
+    if (!error) return null;
+    return (
+      <View style={styles.errorBox}>
+        <Ionicons name="alert-circle" size={17} color={theme.colors.danger} />
+        <View style={styles.errorContentBlock}>
+          <Text style={styles.errorText}>{error}</Text>
+          {retryFn && (
+            <TouchableOpacity
+              style={styles.retryButton}
+              onPress={() => {
+                setError('');
+                retryFn();
+              }}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="refresh-outline" size={13} color={theme.colors.primary} />
+              <Text style={styles.retryButtonText}>Повторить попытку</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+    );
+  };
+
+  const renderBankStep = () => (
+    <View style={styles.bankStep}>
+      <View style={styles.bankStepHeader}>
+        <TouchableOpacity
+          style={styles.iconButton}
+          onPress={() => setBankStep(null)}
+          accessibilityRole="button"
+          accessibilityLabel="Назад"
         >
-          {/* Header */}
-          <View style={styles.headerRow}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <View
-                style={[
-                  styles.headerIconCircle,
-                  { backgroundColor: `${theme.colors.neonCyan}20` },
-                ]}
-              >
-                <Ionicons
-                  name="cloud-done-outline"
-                  size={20}
-                  color={theme.colors.neonCyan}
-                />
-              </View>
-              <View>
-                <Text
-                  style={[styles.modalTitle, { color: theme.colors.textPrimary }]}
-                >
-                  Google Sheets Cloud
-                </Text>
-                <Text
-                  style={[styles.modalSubtitle, { color: theme.colors.textMuted }]}
-                >
-                  Совместный доступ и синхронизация тусовки
-                </Text>
-              </View>
-            </View>
-
-            <TouchableOpacity
-              onPress={onClose}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              style={styles.closeBtn}
-            >
-              <Ionicons
-                name="close"
-                size={22}
-                color={theme.colors.textSecondary}
-              />
-            </TouchableOpacity>
-          </View>
-
-          {/* Navigation Tabs */}
-          <View style={[styles.tabsRow, { backgroundColor: theme.colors.surface }]}>
-            <TouchableOpacity
-              onPress={() => setActiveTab('room')}
-              style={[
-                styles.tabBtn,
-                activeTab === 'room' && {
-                  backgroundColor: theme.colors.primary,
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.tabBtnText,
-                  {
-                    color:
-                      activeTab === 'room'
-                        ? theme.colors.textInverse
-                        : theme.colors.textSecondary,
-                  },
-                ]}
-              >
-                Комната
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={() => setActiveTab('join')}
-              style={[
-                styles.tabBtn,
-                activeTab === 'join' && {
-                  backgroundColor: theme.colors.primary,
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.tabBtnText,
-                  {
-                    color:
-                      activeTab === 'join'
-                        ? theme.colors.textInverse
-                        : theme.colors.textSecondary,
-                  },
-                ]}
-              >
-                Войти по коду
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={() => setActiveTab('settings')}
-              style={[
-                styles.tabBtn,
-                activeTab === 'settings' && {
-                  backgroundColor: theme.colors.primary,
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.tabBtnText,
-                  {
-                    color:
-                      activeTab === 'settings'
-                        ? theme.colors.textInverse
-                        : theme.colors.textSecondary,
-                  },
-                ]}
-              >
-                Настройки URL
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Content Area */}
-          <ScrollView
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.scrollContent}
-          >
-            {/* TAB 1: CURRENT ROOM */}
-            {activeTab === 'room' && (
-              <View style={styles.tabContent}>
-                {currentParty.code ? (
-                  <View
-                    style={[
-                      styles.codeBanner,
-                      {
-                        backgroundColor: theme.colors.surface,
-                        borderColor: theme.colors.neonCyan,
-                      },
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.codeBannerLabel,
-                        { color: theme.colors.textMuted },
-                      ]}
-                    >
-                      КОД ДЛЯ ДРУЗЕЙ В ТУСОВКЕ
-                    </Text>
-                    <View style={styles.codeRow}>
-                      <Text
-                        style={[
-                          styles.codeBannerText,
-                          { color: theme.colors.neonCyan },
-                        ]}
-                      >
-                        {currentParty.code}
-                      </Text>
-                      <TouchableOpacity
-                        onPress={handleCopyCode}
-                        style={[
-                          styles.copyCodeBtn,
-                          { backgroundColor: `${theme.colors.neonCyan}25` },
-                        ]}
-                      >
-                        <Ionicons
-                          name="copy-outline"
-                          size={18}
-                          color={theme.colors.neonCyan}
-                        />
-                      </TouchableOpacity>
-                    </View>
-                    <Text
-                      style={[
-                        styles.codeBannerHint,
-                        { color: theme.colors.textSecondary },
-                      ]}
-                    >
-                      Отправьте этот код друзьям, чтобы они открыли приложение и самостоятельно вносили свои счета. Данные обновляются автоматически каждые 10 секунд.
-                    </Text>
-                  </View>
-                ) : (
-                  <View
-                    style={[
-                      styles.noCodeBox,
-                      {
-                        backgroundColor: theme.colors.surface,
-                        borderColor: theme.colors.surfaceBorder,
-                      },
-                    ]}
-                  >
-                    <Ionicons
-                      name="share-social-outline"
-                      size={36}
-                      color={theme.colors.primary}
-                    />
-                    <Text
-                      style={[
-                        styles.noCodeTitle,
-                        { color: theme.colors.textPrimary },
-                      ]}
-                    >
-                      Комната ещё не создана
-                    </Text>
-                    <Text
-                      style={[
-                        styles.noCodeSubtitle,
-                        { color: theme.colors.textSecondary },
-                      ]}
-                    >
-                      Создайте облачную комнату в вашей Google Таблице, чтобы каждый участник мог в реальном времени добавлять расходы
-                    </Text>
-                    <Button
-                      title="Создать комнату в Google Sheets"
-                      variant="primary"
-                      size="md"
-                      icon="cloud-upload-outline"
-                      onPress={handleRequestCreateRoom}
-                      loading={isLoading}
-                      style={{ marginTop: 14 }}
-                    />
-                  </View>
-                )}
-
-                {currentParty.code && (
-                  <View style={{ marginTop: 14 }}>
-                    <Button
-                      title="Синхронизировать сейчас"
-                      variant="secondary"
-                      size="md"
-                      icon="refresh-outline"
-                      onPress={handleSyncCurrentParty}
-                      loading={isLoading}
-                    />
-                  </View>
-                )}
-              </View>
-            )}
-
-            {/* TAB 2: JOIN BY CODE */}
-            {activeTab === 'join' && (
-              <View style={styles.tabContent}>
-                <Text
-                  style={[
-                    styles.formLabel,
-                    { color: theme.colors.textPrimary },
-                  ]}
-                >
-                  Введите 6-значный код тусовки
-                </Text>
-                <Input
-                  value={roomCodeInput}
-                  onChangeText={(val) => setRoomCodeInput(val.toUpperCase())}
-                  placeholder="Например: PUB777, BAR404"
-                  autoCapitalize="characters"
-                  maxLength={8}
-                  containerStyle={{ marginBottom: 12 }}
-                />
-                <Button
-                  title="Подключиться к тусовке"
-                  variant="primary"
-                  size="md"
-                  icon="enter-outline"
-                  onPress={handleRequestJoinRoom}
-                  loading={isLoading}
-                  disabled={roomCodeInput.trim().length < 4}
-                />
-                <Text
-                  style={[
-                    styles.joinHelpText,
-                    { color: theme.colors.textMuted },
-                  ]}
-                >
-                  {myProfileIsComplete
-                    ? 'Перед входом проверим ваши имя и телефон — их увидят участники комнаты.'
-                    : 'Перед входом попросим имя и телефон: без них участники не смогут перевести вам долг по СБП.'}
-                  {'\n'}После подключения загрузятся участники, счета и актуальный баланс.
-                </Text>
-              </View>
-            )}
-
-            {/* TAB 3: SETTINGS URL */}
-            {activeTab === 'settings' && (
-              <View style={styles.tabContent}>
-                <Text
-                  style={[
-                    styles.formLabel,
-                    { color: theme.colors.textPrimary },
-                  ]}
-                >
-                  URL веб-приложения Google Apps Script
-                </Text>
-                <Input
-                  value={scriptUrl}
-                  onChangeText={setScriptUrlInput}
-                  placeholder="https://script.google.com/macros/s/.../exec"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  containerStyle={{ marginBottom: 12 }}
-                />
-
-                <Button
-                  title="Сохранить и проверить связь"
-                  variant="primary"
-                  size="md"
-                  icon="checkmark-circle-outline"
-                  onPress={handleSaveAndTestUrl}
-                  loading={isLoading}
-                />
-
-                {testResult && (
-                  <View
-                    style={[
-                      styles.testResultBox,
-                      {
-                        backgroundColor: testResult.success
-                          ? `${theme.colors.success}26`
-                          : `${theme.colors.danger}26`,
-                        borderColor: testResult.success
-                          ? theme.colors.success
-                          : theme.colors.danger,
-                      },
-                    ]}
-                  >
-                    <Ionicons
-                      name={
-                        testResult.success
-                          ? 'checkmark-circle'
-                          : 'alert-circle'
-                      }
-                      size={18}
-                      color={
-                        testResult.success
-                          ? theme.colors.success
-                          : theme.colors.danger
-                      }
-                    />
-                    <Text
-                      style={[
-                        styles.testResultText,
-                        {
-                          color: testResult.success
-                            ? theme.colors.success
-                            : theme.colors.danger,
-                        },
-                      ]}
-                    >
-                      {testResult.message}
-                    </Text>
-                  </View>
-                )}
-
-                {/* Quick Deployment Guide Accordion */}
-                <TouchableOpacity
-                  onPress={() => setShowGuide(!showGuide)}
-                  style={[
-                    styles.guideToggleRow,
-                    { borderColor: theme.colors.surfaceBorder },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.guideToggleText,
-                      { color: theme.colors.neonCyan },
-                    ]}
-                  >
-                    Инструкция по развёртыванию бэкенда
-                  </Text>
-                  <Ionicons
-                    name={showGuide ? 'chevron-up' : 'chevron-down'}
-                    size={16}
-                    color={theme.colors.neonCyan}
-                  />
-                </TouchableOpacity>
-
-                {showGuide && (
-                  <View
-                    style={[
-                      styles.guideContentBox,
-                      {
-                        backgroundColor: theme.colors.surface,
-                        borderColor: theme.colors.surfaceBorder,
-                      },
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.guideStepText,
-                        { color: theme.colors.textSecondary },
-                      ]}
-                    >
-                      1. Откройте Google Таблицу на Google Диске.{'\n'}
-                      2. Меню: Расширения ➔ Apps Script.{'\n'}
-                      3. Скопируйте код из файла backend/Code.gs репозитория.{'\n'}
-                      4. Нажмите «Развернуть» ➔ «Новое развертывание» ➔ тип «Веб-приложение».{'\n'}
-                      5. Укажите: Выполнять от «Меня», Доступ: «Все» (Anyone).{'\n'}
-                      6. Вставьте полученную ссылку /exec выше.
-                    </Text>
-                  </View>
-                )}
-              </View>
-            )}
-          </ScrollView>
+          <Ionicons name="arrow-back" size={20} color={theme.colors.textSecondary} />
+        </TouchableOpacity>
+        <View style={styles.bankStepTitleBlock}>
+          <Text style={styles.title}>Подтвердите банк</Text>
+          <Text style={styles.subtitle}>
+            Банк для этого сбора. По умолчанию — из личного профиля.
+          </Text>
+        </View>
       </View>
 
-      {isIdentityGateVisible && (
-        <View style={styles.gateOverlay}>
-          <IdentityGateForm
-            initialProfile={myProfile}
-            title={pendingAction === 'join' ? 'Как вас представить?' : 'Ваши данные для комнаты'}
-            subtitle="Имя и телефон увидит вся комната. По номеру друзья переведут вам долг через СБП."
-            submitLabel={
-              pendingAction === 'join' ? 'Войти в комнату' : 'Создать комнату'
-            }
-            onCancel={handleIdentityCancel}
-            onSave={handleIdentitySave}
+      <View style={styles.profileHint}>
+        <Ionicons name="person-circle-outline" size={18} color={theme.colors.info} />
+        <Text style={styles.profileHintText}>
+          {session?.user.name}: {session?.user.bank}
+        </Text>
+      </View>
+
+      <BankPicker
+        label="Банк для этого сбора"
+        value={selectedBank}
+        onChange={setSelectedBank}
+        helperText="Получатель увидит этот банк и номер телефона в итогах. Платёжные ссылки не создаются."
+      />
+
+      {!currentParty.code && (currentParty.expenses || []).length > 0 ? (
+        <View style={styles.warningBox}>
+          <Ionicons name="archive-outline" size={17} color={theme.colors.warning} />
+          <Text style={styles.warningText}>
+            Текущий локальный чек будет сохранён в архив, а облачная комната начнётся с
+            чистого листа.
+          </Text>
+        </View>
+      ) : null}
+
+      {renderErrorBox(handleConfirmBank)}
+
+      <View style={styles.bankActions}>
+        <Button
+          title="Отмена"
+          variant="outline"
+          onPress={() => setBankStep(null)}
+          style={styles.bankActionButton}
+          disabled={busy}
+        />
+        <Button
+          title={bankStep === 'create' ? 'Создать комнату' : 'Войти в комнату'}
+          icon={bankStep === 'create' ? 'add-circle-outline' : 'log-in-outline'}
+          onPress={handleConfirmBank}
+          loading={busy}
+          disabled={busy}
+          style={styles.bankActionButton}
+        />
+      </View>
+    </View>
+  );
+
+  const renderRoom = () => {
+    if (!currentParty.code) {
+      return (
+        <View style={styles.emptyRoom}>
+          <View style={styles.emptyRoomIcon}>
+            <Ionicons name="cloud-offline-outline" size={32} color={theme.colors.textMuted} />
+          </View>
+          <Text style={styles.emptyRoomTitle}>Комната не подключена</Text>
+          <Text style={styles.emptyRoomText}>
+            Создайте общую комнату или войдите по коду. Участники и статусы оплат будут
+            синхронизироваться автоматически.
+          </Text>
+          <View style={styles.emptyRoomActions}>
+            <Button
+              title="Создать"
+              icon="add-circle-outline"
+              onPress={() => setActiveTab('create')}
+              style={styles.emptyRoomButton}
+            />
+            <Button
+              title="Войти по коду"
+              variant="outline"
+              icon="enter-outline"
+              onPress={() => setActiveTab('join')}
+              style={styles.emptyRoomButton}
+            />
+          </View>
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.roomContent}>
+        <View style={styles.codeCard}>
+          <Text style={styles.codeLabel}>КОД КОМНАТЫ</Text>
+          <Text style={styles.codeValue}>{currentParty.code}</Text>
+          <TouchableOpacity
+            style={[styles.copyCodeButton, copiedCode && styles.copyCodeButtonDone]}
+            onPress={handleCopyCode}
+            accessibilityRole="button"
+          >
+            <Ionicons
+              name={copiedCode ? 'checkmark-circle' : 'copy-outline'}
+              size={17}
+              color={copiedCode ? theme.colors.success : theme.colors.primary}
+            />
+            <Text
+              style={[
+                styles.copyCodeText,
+                copiedCode && { color: theme.colors.success },
+              ]}
+            >
+              {copiedCode ? 'Скопировано!' : 'Скопировать код'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.roomInfoCard}>
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Название</Text>
+            <Text style={styles.infoValue} numberOfLines={1}>
+              {currentParty.title}
+            </Text>
+          </View>
+          <View style={styles.infoDivider} />
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Участники</Text>
+            <Text style={styles.infoValue}>
+              {currentParty.participants.length} чел.
+            </Text>
+          </View>
+          <View style={styles.infoDivider} />
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Оплаты</Text>
+            <Text style={[styles.infoValue, { color: theme.colors.success }]}>
+              {(currentParty.settledTransferIds || []).length} закрыто
+            </Text>
+          </View>
+          <View style={styles.infoDivider} />
+          <View style={styles.infoRow}>
+            <Text style={styles.infoLabel}>Обновлено</Text>
+            <Text style={styles.infoValue}>
+              {lastCloudSyncAt
+                ? new Date(lastCloudSyncAt).toLocaleTimeString('ru-RU', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                  })
+                : '—'}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.liveHint}>
+          <View style={styles.liveDot} />
+          <Text style={styles.liveText}>
+            Статусы оплат и состав комнаты обновляются автоматически у всех участников.
+          </Text>
+        </View>
+
+        <View style={styles.roomActions}>
+          <Button
+            title="Синхронизировать"
+            icon="refresh-outline"
+            variant="secondary"
+            onPress={handleSync}
+            loading={busy}
+            disabled={busy}
+          />
+          <Button
+            title="Покинуть комнату"
+            icon="exit-outline"
+            variant="outline"
+            onPress={handleLeave}
+            disabled={busy}
           />
         </View>
-      )}
+      </View>
+    );
+  };
+
+  const renderCreate = () => (
+    <View style={styles.form}>
+      <Text style={styles.formTitle}>Новая общая комната</Text>
+      <Text style={styles.formHint}>
+        Организатор автоматически становится участником. Друзья подключатся по коду и
+        увидят свои профили, без ручного добавления в базу.
+      </Text>
+
+      <Input
+        label="Название тусовки"
+        placeholder="Например: Пятница в баре"
+        leftIcon="sparkles-outline"
+        value={createTitle}
+        onChangeText={setCreateTitle}
+        maxLength={48}
+      />
+
+      {renderErrorBox(() => startBankStep('create'))}
+
+      <Button
+        title="Продолжить"
+        icon="arrow-forward-outline"
+        iconPosition="right"
+        onPress={() => startBankStep('create')}
+        size="lg"
+      />
     </View>
+  );
+
+  const renderJoin = () => (
+    <View style={styles.form}>
+      <Text style={styles.formTitle}>Войти по коду</Text>
+      <Text style={styles.formHint}>
+        Попросите организатора прислать код комнаты. После входа вы подтвердите банк для
+        этого сбора — по умолчанию подставится банк из профиля.
+      </Text>
+
+      <Input
+        label="Код комнаты"
+        placeholder="Например: PUB777"
+        leftIcon="key-outline"
+        value={joinCode}
+        onChangeText={(value) => setJoinCode(value.toUpperCase())}
+        autoCapitalize="characters"
+        autoCorrect={false}
+        maxLength={10}
+      />
+
+      {renderErrorBox(() => startBankStep('join'))}
+
+      <Button
+        title="Продолжить"
+        icon="arrow-forward-outline"
+        iconPosition="right"
+        onPress={() => startBankStep('join')}
+        size="lg"
+      />
+    </View>
+  );
+
+  const renderSettings = () => (
+    <View style={styles.form}>
+      <Text style={styles.formTitle}>Google Sheets / Apps Script</Text>
+      <Text style={styles.formHint}>
+        Приложение работает с вашей таблицей через Apps Script Web App. После обновления
+        backend/Code.gs обязательно создайте новую версию развёртывания — URL при этом не
+        меняется.
+      </Text>
+
+      <Input
+        label="URL веб-приложения"
+        placeholder="https://script.google.com/macros/s/.../exec"
+        leftIcon="link-outline"
+        value={scriptUrl}
+        onChangeText={setScriptUrl}
+        autoCapitalize="none"
+        autoCorrect={false}
+        multiline
+        inputStyle={{ minHeight: 72, textAlignVertical: 'top' }}
+      />
+
+      <View style={styles.settingsActions}>
+        <Button
+          title="Проверить"
+          icon="pulse-outline"
+          variant="outline"
+          onPress={handleTestConnection}
+          loading={testing}
+          disabled={testing}
+          style={styles.settingsButton}
+        />
+        <Button
+          title="Сохранить URL"
+          icon="save-outline"
+          onPress={handleSaveUrl}
+          style={styles.settingsButton}
+        />
+      </View>
+      <TouchableOpacity onPress={handleResetUrl} style={styles.resetUrlLink}>
+        <Text style={styles.resetUrlText}>Восстановить стандартный URL</Text>
+      </TouchableOpacity>
+
+      <View style={styles.versionHint}>
+        <Ionicons name="information-circle-outline" size={17} color={theme.colors.info} />
+        <Text style={styles.versionHintText}>
+          Проверка подключения требует API версии 2: авторизация, статусы оплат и состав
+          комнаты.
+        </Text>
+      </View>
+    </View>
+  );
+
+  return (
+    <KeyboardAvoidingView
+      style={styles.keyboard}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      {bankStep ? (
+        <>
+          <TouchableOpacity
+            style={styles.closeButtonAbsolute}
+            onPress={onClose}
+            accessibilityRole="button"
+            accessibilityLabel="Закрыть"
+          >
+            <Ionicons name="close" size={22} color={theme.colors.textSecondary} />
+          </TouchableOpacity>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.scrollContent}
+            onScroll={onScroll}
+            scrollEventThrottle={16}
+          >
+            {renderBankStep()}
+          </ScrollView>
+        </>
+      ) : (
+        <>
+          <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+            <View>
+              <View style={styles.header}>
+                <View style={styles.headerText}>
+                  <Text style={styles.title}>Общая комната</Text>
+                  <Text style={styles.subtitle}>
+                    Авторизованные участники и оплаты в одном месте
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.closeButton}
+                  onPress={onClose}
+                  accessibilityRole="button"
+                  accessibilityLabel="Закрыть"
+                >
+                  <Ionicons name="close" size={22} color={theme.colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.tabs}>
+                {TABS.map((tab) => (
+                  <TouchableOpacity
+                    key={tab.id}
+                    style={[styles.tab, activeTab === tab.id && styles.tabActive]}
+                    onPress={() => {
+                      Keyboard.dismiss();
+                      setActiveTab(tab.id);
+                      setError('');
+                    }}
+                    accessibilityRole="button"
+                  >
+                    <Ionicons
+                      name={tab.icon}
+                      size={15}
+                      color={
+                        activeTab === tab.id
+                          ? theme.colors.primary
+                          : theme.colors.textMuted
+                      }
+                    />
+                    <Text
+                      style={[
+                        styles.tabText,
+                        activeTab === tab.id && styles.tabTextActive,
+                      ]}
+                    >
+                      {tab.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          </TouchableWithoutFeedback>
+
+          <ScrollView
+            style={{ flex: 1 }}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.scrollContent}
+            onScroll={onScroll}
+            scrollEventThrottle={16}
+          >
+            {activeTab === 'room' && renderRoom()}
+            {activeTab === 'create' && renderCreate()}
+            {activeTab === 'join' && renderJoin()}
+            {activeTab === 'settings' && renderSettings()}
+          </ScrollView>
+        </>
+      )}
+
+      {busy && bankStep ? (
+        <View style={styles.busyOverlay}>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+          <Text style={styles.busyText}>Связываемся с Google Sheets...</Text>
+        </View>
+      ) : null}
+    </KeyboardAvoidingView>
   );
 };
 
-const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 16,
-  },
-  gateOverlay: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    zIndex: 20,
-    elevation: 20,
-  },
-  modalContainer: {
-    width: '100%',
-    maxWidth: 480,
-    maxHeight: '90%',
-    borderRadius: 20,
-    padding: 20,
-    borderWidth: 1.5,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  headerIconCircle: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    letterSpacing: -0.3,
-  },
-  modalSubtitle: {
-    fontSize: 12,
-    marginTop: 2,
-  },
-  closeBtn: {
-    padding: 4,
-  },
-  tabsRow: {
-    flexDirection: 'row',
-    borderRadius: 12,
-    padding: 4,
-    marginBottom: 16,
-    gap: 4,
-  },
-  tabBtn: {
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  tabBtnText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  scrollContent: {
-    paddingBottom: 10,
-  },
-  tabContent: {
-    paddingVertical: 4,
-  },
-  codeBanner: {
-    borderRadius: 16,
-    padding: 18,
-    borderWidth: 1.5,
-    alignItems: 'center',
-  },
-  codeBannerLabel: {
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 1,
-    marginBottom: 6,
-  },
-  codeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginVertical: 6,
-  },
-  codeBannerText: {
-    fontSize: 32,
-    fontWeight: '900',
-    letterSpacing: 3,
-  },
-  copyCodeBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  codeBannerHint: {
-    fontSize: 12,
-    textAlign: 'center',
-    lineHeight: 18,
-    marginTop: 8,
-  },
-  noCodeBox: {
-    borderRadius: 16,
-    padding: 24,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderStyle: 'dashed',
-  },
-  noCodeTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    marginTop: 10,
-  },
-  noCodeSubtitle: {
-    fontSize: 13,
-    textAlign: 'center',
-    lineHeight: 18,
-    marginTop: 4,
-  },
-  formLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  joinHelpText: {
-    fontSize: 12,
-    textAlign: 'center',
-    marginTop: 12,
-    lineHeight: 18,
-  },
-  testResultBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    marginTop: 12,
-    gap: 8,
-  },
-  testResultText: {
-    fontSize: 13,
-    fontWeight: '600',
-    flex: 1,
-  },
-  guideToggleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderTopWidth: 1,
-    marginTop: 16,
-  },
-  guideToggleText: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  guideContentBox: {
-    padding: 14,
-    borderRadius: 12,
-    borderWidth: 1,
-    marginTop: 8,
-  },
-  guideStepText: {
-    fontSize: 12,
-    lineHeight: 20,
-  },
-});
+function createStyles(theme: ThemeTokens) {
+  return StyleSheet.create({
+    overlay: {
+      flex: 1,
+      justifyContent: 'flex-end',
+      backgroundColor: theme.colors.overlay,
+    },
+    keyboard: {
+      flex: 1,
+      width: '100%',
+      paddingHorizontal: theme.spacing.lg,
+      paddingTop: 4,
+    },
+    sheet: {
+      backgroundColor: theme.colors.background,
+      borderTopLeftRadius: theme.borderRadius.xl,
+      borderTopRightRadius: theme.borderRadius.xl,
+      borderWidth: 1,
+      borderColor: theme.colors.surfaceBorder,
+      paddingHorizontal: theme.spacing.lg,
+      paddingTop: theme.spacing.sm,
+      maxHeight: '100%',
+    },
+    handle: {
+      alignSelf: 'center',
+      width: 42,
+      height: 4,
+      borderRadius: 2,
+      backgroundColor: theme.colors.surfaceBorder,
+      marginBottom: theme.spacing.md,
+    },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      justifyContent: 'space-between',
+      gap: theme.spacing.md,
+      marginBottom: theme.spacing.md,
+    },
+    headerText: {
+      flex: 1,
+    },
+    title: {
+      color: theme.colors.textPrimary,
+      fontSize: 21,
+      fontWeight: '800',
+    },
+    subtitle: {
+      color: theme.colors.textSecondary,
+      fontSize: 12,
+      lineHeight: 17,
+      marginTop: 3,
+    },
+    closeButton: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.colors.surface,
+      borderWidth: 1,
+      borderColor: theme.colors.surfaceBorder,
+    },
+    closeButtonAbsolute: {
+      position: 'absolute',
+      right: theme.spacing.lg,
+      top: theme.spacing.md,
+      zIndex: 2,
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.colors.surface,
+      borderWidth: 1,
+      borderColor: theme.colors.surfaceBorder,
+    },
+    tabs: {
+      flexDirection: 'row',
+      backgroundColor: theme.colors.surface,
+      borderRadius: theme.borderRadius.lg,
+      borderWidth: 1,
+      borderColor: theme.colors.surfaceBorder,
+      padding: 4,
+      marginBottom: theme.spacing.lg,
+    },
+    tab: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 4,
+      paddingVertical: 8,
+      borderRadius: theme.borderRadius.md,
+    },
+    tabActive: {
+      backgroundColor: theme.colors.surfaceElevated,
+    },
+    tabText: {
+      color: theme.colors.textMuted,
+      fontSize: 10,
+      fontWeight: '600',
+    },
+    tabTextActive: {
+      color: theme.colors.primary,
+    },
+    scrollContent: {
+      paddingBottom: theme.spacing.lg,
+    },
+    form: {
+      gap: theme.spacing.md,
+    },
+    formTitle: {
+      color: theme.colors.textPrimary,
+      fontSize: 18,
+      fontWeight: '800',
+    },
+    formHint: {
+      color: theme.colors.textSecondary,
+      fontSize: 12,
+      lineHeight: 18,
+      marginBottom: theme.spacing.xs,
+    },
+    errorBox: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: 10,
+      backgroundColor: `${theme.colors.danger}14`,
+      borderColor: `${theme.colors.danger}55`,
+      borderWidth: 1,
+      borderRadius: theme.borderRadius.md,
+      padding: theme.spacing.md,
+    },
+    errorContentBlock: {
+      flex: 1,
+      gap: 6,
+    },
+    errorText: {
+      color: theme.colors.danger,
+      fontSize: 12,
+      lineHeight: 17,
+    },
+    retryButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      alignSelf: 'flex-start',
+      paddingVertical: 5,
+      paddingHorizontal: 10,
+      borderRadius: theme.borderRadius.sm,
+      backgroundColor: `${theme.colors.primary}18`,
+      borderWidth: 1,
+      borderColor: `${theme.colors.primary}40`,
+      marginTop: 2,
+    },
+    retryButtonText: {
+      color: theme.colors.primary,
+      fontSize: 11,
+      fontWeight: '700',
+    },
+    warningBox: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: 8,
+      backgroundColor: `${theme.colors.warning}12`,
+      borderColor: `${theme.colors.warning}44`,
+      borderWidth: 1,
+      borderRadius: theme.borderRadius.md,
+      padding: theme.spacing.md,
+    },
+    warningText: {
+      flex: 1,
+      color: theme.colors.warning,
+      fontSize: 11,
+      lineHeight: 16,
+    },
+    bankStep: {
+      gap: theme.spacing.md,
+      paddingTop: theme.spacing.sm,
+    },
+    bankStepHeader: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: theme.spacing.md,
+      paddingRight: 34,
+    },
+    bankStepTitleBlock: {
+      flex: 1,
+    },
+    iconButton: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.colors.surface,
+      borderWidth: 1,
+      borderColor: theme.colors.surfaceBorder,
+    },
+    profileHint: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 7,
+      backgroundColor: `${theme.colors.info}10`,
+      borderRadius: theme.borderRadius.md,
+      padding: theme.spacing.md,
+    },
+    profileHintText: {
+      color: theme.colors.textSecondary,
+      fontSize: 12,
+      fontWeight: '600',
+    },
+    bankActions: {
+      flexDirection: 'row',
+      gap: theme.spacing.sm,
+      marginTop: theme.spacing.sm,
+    },
+    bankActionButton: {
+      flex: 1,
+    },
+    emptyRoom: {
+      alignItems: 'center',
+      paddingVertical: theme.spacing.xl,
+      gap: theme.spacing.sm,
+    },
+    emptyRoomIcon: {
+      width: 64,
+      height: 64,
+      borderRadius: 32,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: theme.colors.surface,
+      borderWidth: 1,
+      borderColor: theme.colors.surfaceBorder,
+    },
+    emptyRoomTitle: {
+      color: theme.colors.textPrimary,
+      fontSize: 17,
+      fontWeight: '700',
+      marginTop: theme.spacing.sm,
+    },
+    emptyRoomText: {
+      color: theme.colors.textSecondary,
+      fontSize: 12,
+      lineHeight: 18,
+      textAlign: 'center',
+      maxWidth: 300,
+    },
+    emptyRoomActions: {
+      flexDirection: 'row',
+      gap: theme.spacing.sm,
+      marginTop: theme.spacing.md,
+      width: '100%',
+    },
+    emptyRoomButton: {
+      flex: 1,
+    },
+    roomContent: {
+      gap: theme.spacing.md,
+    },
+    codeCard: {
+      alignItems: 'center',
+      backgroundColor: theme.colors.surface,
+      borderWidth: 1,
+      borderColor: theme.colors.surfaceBorderActive,
+      borderRadius: theme.borderRadius.xl,
+      paddingVertical: theme.spacing.xl,
+      paddingHorizontal: theme.spacing.lg,
+    },
+    codeLabel: {
+      color: theme.colors.textMuted,
+      fontSize: 10,
+      fontWeight: '800',
+      letterSpacing: 1.3,
+    },
+    codeValue: {
+      color: theme.colors.primary,
+      fontSize: 38,
+      fontWeight: '900',
+      letterSpacing: 4,
+      marginVertical: theme.spacing.sm,
+    },
+    copyCodeButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingHorizontal: 12,
+      paddingVertical: 7,
+      borderRadius: theme.borderRadius.full,
+      backgroundColor: `${theme.colors.primary}12`,
+      borderWidth: 1,
+      borderColor: `${theme.colors.primary}44`,
+    },
+    copyCodeButtonDone: {
+      backgroundColor: `${theme.colors.success}12`,
+      borderColor: `${theme.colors.success}44`,
+    },
+    copyCodeText: {
+      color: theme.colors.primary,
+      fontSize: 12,
+      fontWeight: '700',
+    },
+    roomInfoCard: {
+      backgroundColor: theme.colors.surface,
+      borderRadius: theme.borderRadius.lg,
+      borderWidth: 1,
+      borderColor: theme.colors.surfaceBorder,
+      paddingHorizontal: theme.spacing.md,
+    },
+    infoRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: theme.spacing.md,
+      paddingVertical: 10,
+    },
+    infoLabel: {
+      color: theme.colors.textMuted,
+      fontSize: 12,
+    },
+    infoValue: {
+      color: theme.colors.textPrimary,
+      fontSize: 12,
+      fontWeight: '700',
+      flexShrink: 1,
+      textAlign: 'right',
+    },
+    infoDivider: {
+      height: 1,
+      backgroundColor: theme.colors.surfaceBorder,
+    },
+    liveHint: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 7,
+      paddingHorizontal: 2,
+    },
+    liveDot: {
+      width: 7,
+      height: 7,
+      borderRadius: 4,
+      backgroundColor: theme.colors.success,
+    },
+    liveText: {
+      flex: 1,
+      color: theme.colors.textMuted,
+      fontSize: 11,
+      lineHeight: 15,
+    },
+    roomActions: {
+      gap: theme.spacing.sm,
+      marginTop: theme.spacing.sm,
+    },
+    settingsActions: {
+      flexDirection: 'row',
+      gap: theme.spacing.sm,
+    },
+    settingsButton: {
+      flex: 1,
+    },
+    resetUrlLink: {
+      alignSelf: 'center',
+      paddingVertical: 6,
+    },
+    resetUrlText: {
+      color: theme.colors.info,
+      fontSize: 12,
+      fontWeight: '600',
+    },
+    versionHint: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: 8,
+      marginTop: theme.spacing.sm,
+      padding: theme.spacing.md,
+      backgroundColor: `${theme.colors.info}0D`,
+      borderRadius: theme.borderRadius.md,
+    },
+    versionHintText: {
+      flex: 1,
+      color: theme.colors.textSecondary,
+      fontSize: 11,
+      lineHeight: 16,
+    },
+    busyOverlay: {
+      position: 'absolute',
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+      backgroundColor: theme.colors.overlay,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: theme.borderRadius.xl,
+      gap: theme.spacing.sm,
+    },
+    busyText: {
+      color: theme.colors.textSecondary,
+      fontSize: 12,
+      fontWeight: '600',
+    },
+  });
+}

@@ -1,6 +1,5 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
-  Modal,
   View,
   Text,
   StyleSheet,
@@ -8,9 +7,9 @@ import {
   ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useTheme, ThemeId } from '../../context/ThemeContext';
+import { useTheme, ThemeId, ThemeTokens } from '../../context/ThemeContext';
 import { Button } from './Button';
+import { BottomSheetModal } from './BottomSheetModal';
 
 interface ThemeSelectorModalProps {
   visible: boolean;
@@ -22,47 +21,25 @@ export const ThemeSelectorModal: React.FC<ThemeSelectorModalProps> = ({
   onClose,
 }) => {
   const { theme, themeId, setThemeId, availableThemes } = useTheme();
-  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => createStyles(theme), [theme]);
 
   const handleSelect = (id: ThemeId) => {
     setThemeId(id);
   };
 
   return (
-    <Modal
+    <BottomSheetModal
       visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={onClose}
+      onClose={onClose}
+      maxHeight="92%"
+      height="88%"
     >
-      <View
-        style={[
-          styles.overlay,
-          {
-            backgroundColor: theme.colors.overlay,
-            paddingTop: Math.max(insets.top, 20),
-            paddingBottom: Math.max(insets.bottom, 20),
-          },
-        ]}
-      >
-        <View
-          style={[
-            styles.modalContainer,
-            {
-              backgroundColor: theme.colors.surfaceElevated,
-              borderColor: theme.colors.surfaceBorderActive,
-            },
-          ]}
-        >
+      {({ onScroll }) => (
+        <View style={styles.sheetContent}>
           {/* Header */}
           <View style={styles.headerRow}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <View
-                style={[
-                  styles.headerIconCircle,
-                  { backgroundColor: `${theme.colors.primary}20` },
-                ]}
-              >
+              <View style={styles.headerIconCircle}>
                 <Ionicons
                   name="color-palette-outline"
                   size={20}
@@ -70,14 +47,10 @@ export const ThemeSelectorModal: React.FC<ThemeSelectorModalProps> = ({
                 />
               </View>
               <View>
-                <Text
-                  style={[styles.modalTitle, { color: theme.colors.textPrimary }]}
-                >
+                <Text style={styles.modalTitle}>
                   Тема оформления
                 </Text>
-                <Text
-                  style={[styles.modalSubtitle, { color: theme.colors.textMuted }]}
-                >
+                <Text style={styles.modalSubtitle}>
                   Выберите визуальный стиль интерфейса
                 </Text>
               </View>
@@ -98,8 +71,11 @@ export const ThemeSelectorModal: React.FC<ThemeSelectorModalProps> = ({
 
           {/* Themes List */}
           <ScrollView
+            style={styles.themesScrollView}
             contentContainerStyle={styles.themesList}
             showsVerticalScrollIndicator={false}
+            onScroll={onScroll}
+            scrollEventThrottle={16}
           >
             {availableThemes.map((item) => {
               const isSelected = item.id === themeId;
@@ -226,119 +202,126 @@ export const ThemeSelectorModal: React.FC<ThemeSelectorModalProps> = ({
           </ScrollView>
 
           {/* Done Button */}
-          <Button
-            title="Готово"
-            variant="primary"
-            size="md"
-            onPress={onClose}
-            style={{ marginTop: 14 }}
-          />
+          <View style={styles.doneContainer}>
+            <Button
+              title="Готово"
+              variant="primary"
+              size="md"
+              onPress={onClose}
+            />
+          </View>
         </View>
-      </View>
-    </Modal>
+      )}
+    </BottomSheetModal>
   );
 };
 
-const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  modalContainer: {
-    width: '100%',
-    maxWidth: 440,
-    maxHeight: '85%',
-    borderRadius: 20,
-    padding: 20,
-    borderWidth: 1.5,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  headerIconCircle: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    letterSpacing: -0.3,
-  },
-  modalSubtitle: {
-    fontSize: 12,
-    marginTop: 2,
-  },
-  closeBtn: {
-    padding: 4,
-  },
-  themesList: {
-    gap: 12,
-    paddingVertical: 4,
-  },
-  themeCard: {
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 1,
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  cardHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  themeName: {
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  modeBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 999,
-    gap: 4,
-  },
-  modeText: {
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  radioCircle: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  themeTagline: {
-    fontSize: 12,
-    lineHeight: 16,
-    marginBottom: 10,
-  },
-  paletteRow: {
-    flexDirection: 'row',
-    gap: 8,
-    alignItems: 'center',
-  },
-  swatch: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'transparent',
-  },
-});
+function createStyles(theme: ThemeTokens) {
+  return StyleSheet.create({
+    sheetContent: {
+      flex: 1,
+      paddingHorizontal: 20,
+      paddingTop: 4,
+    },
+    headerRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 16,
+    },
+    headerIconCircle: {
+      width: 38,
+      height: 38,
+      borderRadius: 12,
+      backgroundColor: `${theme.colors.primary}20`,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 10,
+    },
+    modalTitle: {
+      fontSize: 18,
+      fontWeight: '800',
+      letterSpacing: -0.3,
+      color: theme.colors.textPrimary,
+    },
+    modalSubtitle: {
+      fontSize: 12,
+      marginTop: 2,
+      color: theme.colors.textMuted,
+    },
+    closeBtn: {
+      padding: 4,
+    },
+    themesScrollView: {
+      flex: 1,
+    },
+    themesList: {
+      gap: 12,
+      paddingTop: 4,
+      paddingBottom: 28,
+    },
+    doneContainer: {
+      paddingTop: 12,
+      paddingBottom: 4,
+      borderTopWidth: 1,
+      borderTopColor: theme.colors.surfaceBorder,
+    },
+    themeCard: {
+      borderRadius: 14,
+      padding: 14,
+      borderWidth: 1,
+    },
+    cardHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 6,
+    },
+    cardHeaderLeft: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+    },
+    themeName: {
+      fontSize: 16,
+      fontWeight: '700',
+    },
+    modeBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: 999,
+      gap: 4,
+    },
+    modeText: {
+      fontSize: 10,
+      fontWeight: '700',
+    },
+    radioCircle: {
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      borderWidth: 2,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    themeTagline: {
+      fontSize: 12,
+      lineHeight: 16,
+      marginBottom: 10,
+    },
+    paletteRow: {
+      flexDirection: 'row',
+      gap: 8,
+      alignItems: 'center',
+    },
+    swatch: {
+      width: 24,
+      height: 24,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: 'transparent',
+    },
+  });
+}

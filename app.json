@@ -2,7 +2,7 @@
   "expo": {
     "name": "PartySplit",
     "slug": "partysplit",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -13,13 +13,24 @@
     },
     "android": {
       "package": "com.partysplit.app",
+      "versionCode": 2,
       "adaptiveIcon": {
+        "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundColor": "#0B0F17"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "POST_NOTIFICATIONS",
+        "REQUEST_INSTALL_PACKAGES",
+        "VIBRATE",
+        "RECEIVE_BOOT_COMPLETED"
+      ]
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "meta": {
+        "viewport": "width=device-width, initial-scale=1, minimum-scale=1, viewport-fit=cover"
+      }
     },
     "extra": {
       "eas": {
@@ -36,7 +47,22 @@
           "imageWidth": 200,
           "resizeMode": "contain"
         }
-      ]
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#00F5A0"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Разрешите доступ к галерее, чтобы установить фото профиля",
+          "cameraPermission": "Разрешите доступ к камере, чтобы сделать фото профиля"
+        }
+      ],
+      "expo-status-bar"
     ]
   }
 }

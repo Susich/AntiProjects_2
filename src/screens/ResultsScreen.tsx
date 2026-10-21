@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -8,14 +8,16 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { usePartyStore } from '../store/usePartyStore';
-import { useTheme } from '../context/ThemeContext';
+import { ThemeTokens, useTheme } from '../context/ThemeContext';
 import { usePartyCalculator } from '../hooks/usePartyCalculator';
-import { ParticipantProfile } from '../types';
+import { SimplifiedDebtTransfer } from '../types';
 import { PartySummaryBanner } from '../components/results/PartySummaryBanner';
 import { DebtorCard } from '../components/results/DebtorCard';
 import { Button } from '../components/common/Button';
-import { formatRubles, getInitials } from '../utils/currency';
+import { formatRubles } from '../utils/currency';
 import { useToast } from '../components/common/Toast';
+import { FadeSlideIn } from '../components/common/FadeSlideIn';
+import { Avatar } from '../components/common/Avatar';
 
 type FilterTab = 'all' | 'pending' | 'settled';
 
@@ -26,11 +28,10 @@ interface ResultsScreenProps {
 
 export const ResultsScreen: React.FC<ResultsScreenProps> = ({
   onNavigateToParty,
-  onNavigateToProfile,
 }) => {
   const { theme } = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const currentParty = usePartyStore((s) => s.currentParty);
-  const savedProfiles = usePartyStore((s) => s.savedProfiles);
   const toggleTransferSettled = usePartyStore((s) => s.toggleTransferSettled);
   const saveCurrentPartyToHistory = usePartyStore((s) => s.saveCurrentPartyToHistory);
   const { showToast } = useToast();
@@ -38,10 +39,8 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all');
   const [showBalancesDetails, setShowBalancesDetails] = useState(false);
 
-  // Resolve participants in active party
-  const partyProfiles = currentParty.participants
-    .map((id) => savedProfiles.find((p) => p.id === id))
-    .filter(Boolean) as ParticipantProfile[];
+  // Participants are authenticated users in the room, not a local address book.
+  const partyProfiles = currentParty.participants || [];
 
   // Greedy debt simplification calculator
   const calculation = usePartyCalculator({
@@ -55,6 +54,65 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
     showToast('Тусовка сохранена в архив Истории!', { type: 'success' });
   };
 
+  const handleToggleTransfer = (transfer: SimplifiedDebtTransfer) => {
+    // Zustand updates and persists immediately; the queue sends the request in
+    // the background. A later failure rolls the toggle back and shows a toast
+    // from the queue.
+    void toggleTransferSettled(transfer);
+    showToast(
+      transfer.isSettled ? 'Перевод возвращён в ожидание' : 'Перевод отмечен оплаченным',
+      { type: transfer.isSettled ? 'info' : 'success' }
+    );
+  };
+
+  const participantStatuses = partyProfiles.map((participant) => {
+    const outgoing = calculation.transfers.filter((t) => t.fromUser.id === participant.id);
+    const incoming = calculation.transfers.filter((t) => t.toUser.id === participant.id);
+    const pendingOutgoing = outgoing.filter((t) => !t.isSettled);
+    const pendingIncoming = incoming.filter((t) => !t.isSettled);
+    const pendingOutgoingAmount = pendingOutgoing.reduce((sum, t) => sum + t.amount, 0);
+    const pendingIncomingAmount = pendingIncoming.reduce((sum, t) => sum + t.amount, 0);
+
+    if (outgoing.length === 0 && incoming.length === 0) {
+      return {
+        participant,
+        label: 'В расчёте',
+        color: theme.colors.success,
+        icon: 'checkmark-circle-outline' as const,
+      };
+    }
+    if (pendingOutgoing.length > 0) {
+      return {
+        participant,
+        label: `Ожидает оплаты ${formatRubles(pendingOutgoingAmount)}`,
+        color: theme.colors.warning,
+        icon: 'time-outline' as const,
+      };
+    }
+    if (outgoing.length > 0) {
+      return {
+        participant,
+        label: 'Оплатил свою часть',
+        color: theme.colors.success,
+        icon: 'checkmark-done-outline' as const,
+      };
+    }
+    if (pendingIncoming.length > 0) {
+      return {
+        participant,
+        label: `Ждёт перевода ${formatRubles(pendingIncomingAmount)}`,
+        color: theme.colors.info,
+        icon: 'hourglass-outline' as const,
+      };
+    }
+    return {
+      participant,
+      label: 'Получил перевод',
+      color: theme.colors.success,
+      icon: 'cash-outline' as const,
+    };
+  });
+
   const filteredTransfers = calculation.transfers.filter((t) => {
     if (activeFilter === 'pending') return !t.isSettled;
     if (activeFilter === 'settled') return t.isSettled;
@@ -63,22 +121,17 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
 
   if ((currentParty.expenses || []).length === 0 || partyProfiles.length === 0) {
     return (
-      <View style={[styles.emptyContainer, { backgroundColor: theme.colors.background }]}>
-        <View
-          style={[
-            styles.emptyIconCircle,
-            { backgroundColor: `${theme.colors.neonCyan}18` },
-          ]}
-        >
+      <View style={styles.emptyContainer}>
+        <View style={styles.emptyIconCircle}>
           <Ionicons name="calculator-outline" size={36} color={theme.colors.neonCyan} />
         </View>
-        <Text style={[styles.emptyTitle, { color: theme.colors.textPrimary }]}>
+        <Text style={styles.emptyTitle}>
           Недостаточно данных для расчёта
         </Text>
-        <Text style={[styles.emptySubtitle, { color: theme.colors.textSecondary }]}>
+        <Text style={styles.emptySubtitle}>
           {partyProfiles.length === 0
-            ? 'Добавьте хотя бы одного участника в тусовку'
-            : 'Добавьте хотя бы один счёт на вкладке «Чек & Люди»'}
+            ? 'Подключите общую комнату — участники появятся автоматически'
+            : 'Добавьте хотя бы один счёт на вкладке «Чек & Траты»'}
         </Text>
         <Button
           title="Перейти к добавлению счетов"
@@ -92,7 +145,7 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
   }
 
   return (
-    <View style={[styles.screenContainer, { backgroundColor: theme.colors.background }]}>
+    <View style={styles.screenContainer}>
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
@@ -104,15 +157,7 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
         />
 
         {/* Transparent Net Balances Accordion */}
-        <View
-          style={[
-            styles.balancesSection,
-            {
-              backgroundColor: theme.colors.surface,
-              borderColor: theme.colors.surfaceBorder,
-            },
-          ]}
-        >
+        <View style={styles.balancesSection}>
           <TouchableOpacity
             style={styles.balancesToggleRow}
             onPress={() => setShowBalancesDetails((prev) => !prev)}
@@ -125,7 +170,7 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
                 color={theme.colors.neonCyan}
                 style={{ marginRight: 6 }}
               />
-              <Text style={[styles.balancesToggleText, { color: theme.colors.textPrimary }]}>
+              <Text style={styles.balancesToggleText}>
                 Чистый баланс участников ({calculation.balances.length} чел.)
               </Text>
             </View>
@@ -137,40 +182,25 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
           </TouchableOpacity>
 
           {showBalancesDetails && (
-            <View
-              style={[
-                styles.balancesList,
-                { borderTopColor: theme.colors.surfaceBorder },
-              ]}
-            >
+            <View style={styles.balancesList}>
               {calculation.balances.map((b) => {
                 const isCreditor = b.netBalance > 0.01;
                 const isDebtor = b.netBalance < -0.01;
 
                 return (
-                  <View
-                    key={b.participant.id}
-                    style={[
-                      styles.balanceItemRow,
-                      { borderBottomColor: theme.colors.surfaceBorder },
-                    ]}
-                  >
+                  <View key={b.participant.id} style={styles.balanceItemRow}>
                     <View style={styles.balanceUserLeft}>
-                      <View
-                        style={[
-                          styles.balanceAvatar,
-                          { backgroundColor: b.participant.avatarColor || theme.colors.primary },
-                        ]}
-                      >
-                        <Text style={[styles.balanceAvatarText, { color: theme.colors.textInverse }]}>
-                          {getInitials(b.participant.name)}
-                        </Text>
-                      </View>
+                      <Avatar
+                        url={b.participant.avatarUrl}
+                        name={b.participant.name}
+                        color={b.participant.avatarColor}
+                        size={38}
+                      />
                       <View style={{ flex: 1 }}>
-                        <Text style={[styles.balanceUserName, { color: theme.colors.textPrimary }]}>
+                        <Text style={styles.balanceUserName}>
                           {b.participant.name}
                         </Text>
-                        <Text style={[styles.balanceUserSub, { color: theme.colors.textMuted }]}>
+                        <Text style={styles.balanceUserSub}>
                           Оплатил: {formatRubles(b.totalPaid)} • Потребил: {formatRubles(b.totalConsumed)}
                         </Text>
                       </View>
@@ -191,7 +221,7 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
                       >
                         {isCreditor ? `+${formatRubles(b.netBalance)}` : formatRubles(b.netBalance)}
                       </Text>
-                      <Text style={[styles.balanceNetRole, { color: theme.colors.textMuted }]}>
+                      <Text style={styles.balanceNetRole}>
                         {isCreditor ? 'Кредитор' : isDebtor ? 'Должник' : 'В расчёте'}
                       </Text>
                     </View>
@@ -202,23 +232,51 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
           )}
         </View>
 
+        {/* Participant payment status — who has paid and who is still waiting. */}
+        <View style={styles.statusSection}>
+          <View style={styles.statusHeader}>
+            <View style={styles.statusHeaderLeft}>
+              <Ionicons name="people-outline" size={16} color={theme.colors.primary} />
+              <Text style={styles.statusTitle}>
+                Статусы участников
+              </Text>
+            </View>
+            <Text style={styles.statusSubtitle}>
+              в реальном времени
+            </Text>
+          </View>
+
+          {participantStatuses.map((status) => (
+            <View key={status.participant.id} style={styles.statusRow}>
+              <Avatar
+                url={status.participant.avatarUrl}
+                name={status.participant.name}
+                color={status.participant.avatarColor}
+                size={36}
+              />
+              <View style={styles.statusInfo}>
+                <Text style={styles.statusName}>
+                  {status.participant.name}
+                </Text>
+                <Text style={[styles.statusLabel, { color: status.color }]}>
+                  {status.label}
+                </Text>
+              </View>
+              <Ionicons name={status.icon} size={19} color={status.color} />
+            </View>
+          ))}
+        </View>
+
         {/* Filter Pills */}
         <View style={styles.filterRow}>
           <TouchableOpacity
             onPress={() => setActiveFilter('all')}
-            style={[
-              styles.filterPill,
-              {
-                backgroundColor: activeFilter === 'all' ? theme.colors.primary : theme.colors.surface,
-                borderColor: activeFilter === 'all' ? theme.colors.primary : theme.colors.surfaceBorder,
-              },
-            ]}
+            style={[styles.filterPill, activeFilter === 'all' && styles.filterPillActive]}
           >
             <Text
               style={[
                 styles.filterText,
-                { color: activeFilter === 'all' ? theme.colors.textInverse : theme.colors.textSecondary },
-                activeFilter === 'all' && { fontWeight: '700' },
+                activeFilter === 'all' && styles.filterTextActive,
               ]}
             >
               Все переводы ({calculation.transfers.length})
@@ -227,19 +285,12 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
 
           <TouchableOpacity
             onPress={() => setActiveFilter('pending')}
-            style={[
-              styles.filterPill,
-              {
-                backgroundColor: activeFilter === 'pending' ? theme.colors.primary : theme.colors.surface,
-                borderColor: activeFilter === 'pending' ? theme.colors.primary : theme.colors.surfaceBorder,
-              },
-            ]}
+            style={[styles.filterPill, activeFilter === 'pending' && styles.filterPillActive]}
           >
             <Text
               style={[
                 styles.filterText,
-                { color: activeFilter === 'pending' ? theme.colors.textInverse : theme.colors.textSecondary },
-                activeFilter === 'pending' && { fontWeight: '700' },
+                activeFilter === 'pending' && styles.filterTextActive,
               ]}
             >
               Ожидают ({calculation.pendingCount})
@@ -248,19 +299,12 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
 
           <TouchableOpacity
             onPress={() => setActiveFilter('settled')}
-            style={[
-              styles.filterPill,
-              {
-                backgroundColor: activeFilter === 'settled' ? theme.colors.primary : theme.colors.surface,
-                borderColor: activeFilter === 'settled' ? theme.colors.primary : theme.colors.surfaceBorder,
-              },
-            ]}
+            style={[styles.filterPill, activeFilter === 'settled' && styles.filterPillActive]}
           >
             <Text
               style={[
                 styles.filterText,
-                { color: activeFilter === 'settled' ? theme.colors.textInverse : theme.colors.textSecondary },
-                activeFilter === 'settled' && { fontWeight: '700' },
+                activeFilter === 'settled' && styles.filterTextActive,
               ]}
             >
               Оплачено ({calculation.settledCount})
@@ -268,20 +312,33 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
           </TouchableOpacity>
         </View>
 
+        {/* All Debts Settled Celebration Card */}
+        {calculation.transfers.length > 0 && calculation.pendingCount === 0 && (
+          <View style={styles.allSettledCard}>
+            <Ionicons name="trophy-outline" size={32} color={theme.colors.success} />
+            <Text style={styles.allSettledTitle}>
+              Все расчёты закрыты! 🎉
+            </Text>
+            <Text style={styles.allSettledSub}>
+              Все участники перевели свои доли. Вы можете завершить тусовку и отправить её в архив.
+            </Text>
+            <Button
+              title="Завершить и сохранить в архив"
+              variant="neon"
+              size="md"
+              icon="archive"
+              onPress={handleSaveToHistory}
+              style={{ marginTop: 6, width: '100%' }}
+            />
+          </View>
+        )}
+
         {/* Transfer Cards */}
         <View style={styles.transfersList}>
           {filteredTransfers.length === 0 ? (
-            <View
-              style={[
-                styles.noDebtorsFiltered,
-                {
-                  backgroundColor: theme.colors.surface,
-                  borderColor: theme.colors.surfaceBorder,
-                },
-              ]}
-            >
+            <View style={styles.noDebtorsFiltered}>
               <Ionicons name="checkmark-done-circle" size={36} color={theme.colors.neonEmerald} />
-              <Text style={[styles.noDebtorsText, { color: theme.colors.neonEmerald }]}>
+              <Text style={styles.noDebtorsText}>
                 {calculation.transfers.length === 0
                   ? 'Все расходы уравновешены! Никто никому ничего не должен 🎉'
                   : activeFilter === 'pending'
@@ -290,13 +347,14 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
               </Text>
             </View>
           ) : (
-            filteredTransfers.map((transfer) => (
-              <DebtorCard
-                key={transfer.id}
-                transfer={transfer}
-                partyTitle={currentParty.title}
-                onToggleSettled={toggleTransferSettled}
-              />
+            filteredTransfers.map((transfer, index) => (
+              <FadeSlideIn key={transfer.id} index={index}>
+                <DebtorCard
+                  transfer={transfer}
+                  partyTitle={currentParty.title}
+                  onToggleSettled={handleToggleTransfer}
+                />
+              </FadeSlideIn>
             ))
           )}
         </View>
@@ -317,137 +375,256 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  screenContainer: {
-    flex: 1,
-  },
-  scrollContent: {
-    padding: 16,
-    paddingBottom: 40,
-  },
-  balancesSection: {
-    borderRadius: 16,
-    borderWidth: 1,
-    marginBottom: 16,
-    overflow: 'hidden',
-  },
-  balancesToggleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 14,
-  },
-  balancesToggleText: {
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  balancesList: {
-    paddingHorizontal: 14,
-    paddingBottom: 12,
-    borderTopWidth: 1,
-  },
-  balanceItemRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-  },
-  balanceUserLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-    marginRight: 10,
-  },
-  balanceAvatar: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 8,
-  },
-  balanceAvatarText: {
-    fontSize: 11,
-    fontWeight: '800',
-  },
-  balanceUserName: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  balanceUserSub: {
-    fontSize: 10,
-    marginTop: 1,
-  },
-  balanceAmountContainer: {
-    alignItems: 'flex-end',
-  },
-  balanceNetText: {
-    fontSize: 13,
-    fontWeight: '800',
-  },
-  balanceNetRole: {
-    fontSize: 9,
-    fontWeight: '600',
-  },
-  filterRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 14,
-  },
-  filterPill: {
-    paddingVertical: 7,
-    paddingHorizontal: 12,
-    borderRadius: 999,
-    borderWidth: 1,
-  },
-  filterText: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  transfersList: {
-    marginBottom: 16,
-  },
-  noDebtorsFiltered: {
-    padding: 24,
-    borderRadius: 16,
-    borderWidth: 1,
-    alignItems: 'center',
-    marginVertical: 10,
-  },
-  noDebtorsText: {
-    fontSize: 14,
-    fontWeight: '600',
-    textAlign: 'center',
-    marginTop: 8,
-    lineHeight: 20,
-  },
-  bottomSection: {
-    marginTop: 8,
-  },
-  emptyContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 28,
-  },
-  emptyIconCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  emptySubtitle: {
-    fontSize: 14,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-});
+function createStyles(theme: ThemeTokens) {
+  return StyleSheet.create({
+    screenContainer: {
+      flex: 1,
+      backgroundColor: theme.colors.background,
+    },
+    scrollContent: {
+      padding: 16,
+      paddingBottom: 64,
+    },
+    balancesSection: {
+      backgroundColor: theme.colors.surface,
+      borderColor: theme.colors.surfaceBorder,
+      borderRadius: 16,
+      borderWidth: 1,
+      marginBottom: 16,
+      overflow: 'hidden',
+    },
+    balancesToggleRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      padding: 14,
+    },
+    balancesToggleText: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: theme.colors.textPrimary,
+    },
+    balancesList: {
+      paddingHorizontal: 14,
+      paddingBottom: 12,
+      borderTopWidth: 1,
+      borderTopColor: theme.colors.surfaceBorder,
+    },
+    balanceItemRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 8,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.colors.surfaceBorder,
+    },
+    balanceUserLeft: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      flex: 1,
+      marginRight: 10,
+    },
+    balanceAvatar: {
+      width: 30,
+      height: 30,
+      borderRadius: 15,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 8,
+    },
+    balanceAvatarText: {
+      fontSize: 11,
+      fontWeight: '800',
+      color: theme.colors.textInverse,
+    },
+    balanceUserName: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: theme.colors.textPrimary,
+    },
+    balanceUserSub: {
+      fontSize: 10,
+      marginTop: 1,
+      color: theme.colors.textMuted,
+    },
+    balanceAmountContainer: {
+      alignItems: 'flex-end',
+    },
+    balanceNetText: {
+      fontSize: 13,
+      fontWeight: '800',
+    },
+    balanceNetRole: {
+      fontSize: 9,
+      fontWeight: '600',
+      color: theme.colors.textMuted,
+    },
+    statusSection: {
+      backgroundColor: theme.colors.surface,
+      borderColor: theme.colors.surfaceBorder,
+      borderRadius: 16,
+      borderWidth: 1,
+      marginBottom: 16,
+      overflow: 'hidden',
+    },
+    statusHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+    },
+    statusHeaderLeft: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+    },
+    statusTitle: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: theme.colors.textPrimary,
+    },
+    statusSubtitle: {
+      fontSize: 10,
+      fontWeight: '500',
+      color: theme.colors.textMuted,
+    },
+    statusRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 14,
+      paddingVertical: 9,
+      borderTopWidth: 1,
+      borderTopColor: theme.colors.surfaceBorder,
+      gap: 9,
+    },
+    statusAvatar: {
+      width: 30,
+      height: 30,
+      borderRadius: 15,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    statusAvatarText: {
+      fontSize: 11,
+      fontWeight: '800',
+      color: theme.colors.textInverse,
+    },
+    statusInfo: {
+      flex: 1,
+    },
+    statusName: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: theme.colors.textPrimary,
+    },
+    statusLabel: {
+      fontSize: 10,
+      fontWeight: '600',
+      marginTop: 1,
+    },
+    filterRow: {
+      flexDirection: 'row',
+      gap: 8,
+      marginBottom: 14,
+    },
+    filterPill: {
+      paddingVertical: 7,
+      paddingHorizontal: 12,
+      borderRadius: 999,
+      borderWidth: 1,
+      backgroundColor: theme.colors.surface,
+      borderColor: theme.colors.surfaceBorder,
+    },
+    filterPillActive: {
+      backgroundColor: theme.colors.primary,
+      borderColor: theme.colors.primary,
+    },
+    filterText: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: theme.colors.textSecondary,
+    },
+    filterTextActive: {
+      color: theme.colors.textInverse,
+      fontWeight: '700',
+    },
+    transfersList: {
+      marginBottom: 16,
+    },
+    noDebtorsFiltered: {
+      backgroundColor: theme.colors.surface,
+      borderColor: theme.colors.surfaceBorder,
+      padding: 24,
+      borderRadius: 16,
+      borderWidth: 1,
+      alignItems: 'center',
+      marginVertical: 10,
+    },
+    noDebtorsText: {
+      fontSize: 14,
+      fontWeight: '600',
+      textAlign: 'center',
+      marginTop: 8,
+      lineHeight: 20,
+      color: theme.colors.neonEmerald,
+    },
+    bottomSection: {
+      marginTop: 8,
+    },
+    allSettledCard: {
+      backgroundColor: `${theme.colors.success}14`,
+      borderColor: `${theme.colors.success}44`,
+      borderRadius: 16,
+      borderWidth: 1.5,
+      padding: 20,
+      alignItems: 'center',
+      marginBottom: 16,
+      gap: 6,
+    },
+    allSettledTitle: {
+      fontSize: 17,
+      fontWeight: '800',
+      marginTop: 2,
+      textAlign: 'center',
+      color: theme.colors.textPrimary,
+    },
+    allSettledSub: {
+      fontSize: 12,
+      lineHeight: 18,
+      textAlign: 'center',
+      maxWidth: 290,
+      marginBottom: 8,
+      color: theme.colors.textSecondary,
+    },
+    emptyContainer: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 28,
+      backgroundColor: theme.colors.background,
+    },
+    emptyIconCircle: {
+      width: 64,
+      height: 64,
+      borderRadius: 32,
+      backgroundColor: `${theme.colors.neonCyan}18`,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 16,
+    },
+    emptyTitle: {
+      fontSize: 18,
+      fontWeight: '700',
+      textAlign: 'center',
+      marginBottom: 8,
+      color: theme.colors.textPrimary,
+    },
+    emptySubtitle: {
+      fontSize: 14,
+      textAlign: 'center',
+      lineHeight: 20,
+      color: theme.colors.textSecondary,
+    },
+  });
+}

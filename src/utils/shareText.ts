@@ -3,9 +3,8 @@ import { DebtCalculationResult, SimplifiedDebtTransfer } from '../types';
 import { formatPhone, formatRubles } from './currency';
 
 /**
- * Generates structured, clear, and visually appealing summary text
- * containing all simplified debt transfers and creditors' SBP requisites
- * for sharing to Telegram/WhatsApp group chats.
+ * Generates a shareable settlement summary. It intentionally contains only
+ * bank/phone details and never builds payment URLs or deep links.
  */
 export function generatePartySettlementSummary(
   result: DebtCalculationResult,
@@ -20,25 +19,18 @@ export function generatePartySettlementSummary(
 Никто никому ничего не должен! ✨`;
   }
 
-  // Format transfers list with requisites
   const transferBlocks = result.transfers.map((t, index) => {
     const fromName = t.fromUser.name;
     const toName = t.toUser.name;
     const amountStr = formatRubles(t.amount);
-    const phone = t.toUser.paymentInfo.phone ? formatPhone(t.toUser.paymentInfo.phone) : '';
-    const url = t.toUser.paymentInfo.sbpQrOrUrl ? t.toUser.paymentInfo.sbpQrOrUrl.trim() : '';
+    const phone = t.toUser.phone ? formatPhone(t.toUser.phone) : '';
+    const bank = t.toUser.bank || 'банк не указан';
     const statusMark = t.isSettled ? '✅ [Оплачено]' : '⏳';
 
-    let requisites = '      💳 Перевод по СБП';
-    if (phone) {
-      requisites += `\n      📱 Телефон: ${phone}`;
-    }
-    if (url) {
-      requisites += `\n      🔗 СБП-ссылка: ${url}`;
-    }
-    if (!phone && !url) {
-      requisites += '\n      ⚠️ Реквизиты не указаны — попросите получателя добавить телефон в профиле';
-    }
+    let requisites = `      🏦 Банк: ${bank}`;
+    requisites += phone
+      ? `\n      📱 Телефон: ${phone}`
+      : '\n      ⚠️ Телефон не указан — попросите получателя заполнить профиль';
 
     return `${index + 1}. ${statusMark} ${fromName} ➔ ${toName}: ${amountStr}\n${requisites}`;
   });
@@ -47,14 +39,14 @@ export function generatePartySettlementSummary(
 Общая сумма расходов: ${totalStr}
 Количество переводов: ${result.transfers.length}
 
-Кому и сколько переводить (СБП):
+Кому и сколько переводить:
 ${transferBlocks.join('\n\n')}
 
-Все расчёты сведены без лишних промежуточных переводов. После оплаты пришлите чек / подтверждение! 🙌`;
+Все расчёты сведены без лишних промежуточных переводов. После оплаты отметьте перевод в приложении! 🙌`;
 }
 
 /**
- * Generates personalized message for a single debtor transfer.
+ * Generates a personalized message for a single debtor transfer.
  */
 export function generateSingleTransferShareText(
   transfer: SimplifiedDebtTransfer,
@@ -64,23 +56,13 @@ export function generateSingleTransferShareText(
   const debtorName = transfer.fromUser.name;
   const creditorName = transfer.toUser.name;
   const amountStr = formatRubles(transfer.amount);
-  const phone = transfer.toUser.paymentInfo.phone
-    ? formatPhone(transfer.toUser.paymentInfo.phone)
-    : '';
-  const url = transfer.toUser.paymentInfo.sbpQrOrUrl
-    ? transfer.toUser.paymentInfo.sbpQrOrUrl.trim()
-    : '';
+  const phone = transfer.toUser.phone ? formatPhone(transfer.toUser.phone) : '';
+  const bank = transfer.toUser.bank || 'банк не указан';
 
-  let requisites = '• Перевод по СБП';
-  if (phone) {
-    requisites += `\n• Телефон: ${phone}`;
-  }
-  if (url) {
-    requisites += `\n• СБП-ссылка: ${url}`;
-  }
-  if (!phone && !url) {
-    requisites += '\n• ⚠️ Реквизиты не указаны — попросите получателя добавить телефон';
-  }
+  let requisites = `• Банк: ${bank}`;
+  requisites += phone
+    ? `\n• Телефон: ${phone}`
+    : '\n• ⚠️ Телефон не указан — попросите получателя заполнить профиль';
 
   return `Привет, ${debtorName}! 👋
 По итогам сведения чека за «${displayTitle}» твой финальный перевод: ${amountStr} в пользу ${creditorName}.

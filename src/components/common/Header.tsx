@@ -1,33 +1,38 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   Alert,
-  Modal,
   Platform,
+  Modal,
+  Pressable,
+  KeyboardAvoidingView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { usePartyStore } from '../../store/usePartyStore';
-import { useTheme } from '../../context/ThemeContext';
+import { ThemeTokens, useTheme } from '../../context/ThemeContext';
 import { Input } from './Input';
 import { Button } from './Button';
 import { useToast } from './Toast';
-import { ThemeSelectorModal } from './ThemeSelectorModal';
 import { CloudSyncModal } from '../party/CloudSyncModal';
+import { NotificationCenterModal } from '../notifications/NotificationCenterModal';
+import { useNotificationStore } from '../../store/useNotificationStore';
 
 export const Header: React.FC = () => {
   const { theme } = useTheme();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const currentParty = usePartyStore((s) => s.currentParty);
   const setPartyTitle = usePartyStore((s) => s.setPartyTitle);
   const resetParty = usePartyStore((s) => s.resetParty);
   const saveCurrentPartyToHistory = usePartyStore((s) => s.saveCurrentPartyToHistory);
+  const unreadCount = useNotificationStore((s) => s.unreadCount);
   const { showToast } = useToast();
 
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  const [isThemeModalOpen, setIsThemeModalOpen] = useState(false);
   const [isCloudModalOpen, setIsCloudModalOpen] = useState(false);
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [tempTitle, setTempTitle] = useState(currentParty.title);
 
   const handleOpenEdit = () => {
@@ -70,40 +75,18 @@ export const Header: React.FC = () => {
     );
   };
 
-  const handleQuickSave = () => {
-    saveCurrentPartyToHistory();
-    showToast('Тусовка сохранена в Историю!', { type: 'success' });
-  };
-
   return (
-    <View
-      style={[
-        styles.headerContainer,
-        {
-          backgroundColor: theme.colors.background,
-          borderBottomColor: theme.colors.surfaceBorder,
-        },
-      ]}
-    >
+    <View style={styles.headerContainer}>
       <View style={styles.topRow}>
         <View style={styles.brandRow}>
-          <View
-            style={[
-              styles.logoPill,
-              { backgroundColor: theme.colors.primary },
-            ]}
-          >
+          <View style={styles.logoPill}>
             <Ionicons name="wine-outline" size={17} color={theme.colors.textInverse} />
           </View>
           <View>
-            <Text
-              style={[styles.brandTitle, { color: theme.colors.textPrimary }]}
-            >
+            <Text style={styles.brandTitle}>
               PartySplit
             </Text>
-            <Text
-              style={[styles.brandSubtitle, { color: theme.colors.primaryLight }]}
-            >
+            <Text style={styles.brandSubtitle}>
               Делим счёт честно
             </Text>
           </View>
@@ -111,20 +94,42 @@ export const Header: React.FC = () => {
 
         {/* Header Action Buttons */}
         <View style={styles.actionsRow}>
+          {/* Notifications Bell Button */}
+          <TouchableOpacity
+            activeOpacity={0.75}
+            onPress={() => setIsNotificationsOpen(true)}
+            style={styles.iconBtn}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel="Уведомления"
+          >
+            <Ionicons
+              name={unreadCount > 0 ? 'notifications' : 'notifications-outline'}
+              size={18}
+              color={
+                unreadCount > 0 ? theme.colors.primary : theme.colors.textSecondary
+              }
+            />
+            {unreadCount > 0 && (
+              <View style={styles.unreadBadge}>
+                <Text style={styles.unreadBadgeText}>
+                  {unreadCount > 9 ? '9+' : unreadCount}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+
           {/* Cloud Sync Button */}
           <TouchableOpacity
             activeOpacity={0.75}
             onPress={() => setIsCloudModalOpen(true)}
             style={[
               styles.iconBtn,
-              {
-                backgroundColor: theme.colors.surface,
-                borderColor: currentParty.code
-                  ? theme.colors.neonCyan
-                  : theme.colors.surfaceBorder,
-              },
+              currentParty.code ? styles.iconBtnConnected : null,
             ]}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel="Синхронизация комнаты"
           >
             <Ionicons
               name={currentParty.code ? 'cloud-done-outline' : 'cloud-outline'}
@@ -136,70 +141,18 @@ export const Header: React.FC = () => {
               }
             />
             {currentParty.code && (
-              <View
-                style={[
-                  styles.activeCloudDot,
-                  { backgroundColor: theme.colors.neonCyan },
-                ]}
-              />
+              <View style={styles.activeCloudDot} />
             )}
-          </TouchableOpacity>
-
-          {/* Theme Switcher Button */}
-          <TouchableOpacity
-            activeOpacity={0.75}
-            onPress={() => setIsThemeModalOpen(true)}
-            style={[
-              styles.iconBtn,
-              {
-                backgroundColor: theme.colors.surface,
-                borderColor: theme.colors.surfaceBorder,
-                marginLeft: 7,
-              },
-            ]}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            <Ionicons
-              name="color-palette-outline"
-              size={18}
-              color={theme.colors.accent}
-            />
-          </TouchableOpacity>
-
-          {/* Save to History Button */}
-          <TouchableOpacity
-            activeOpacity={0.75}
-            onPress={handleQuickSave}
-            style={[
-              styles.iconBtn,
-              {
-                backgroundColor: theme.colors.surface,
-                borderColor: theme.colors.surfaceBorder,
-                marginLeft: 7,
-              },
-            ]}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            <Ionicons
-              name="bookmark-outline"
-              size={18}
-              color={theme.colors.neonEmerald}
-            />
           </TouchableOpacity>
 
           {/* Reset Party Button */}
           <TouchableOpacity
             activeOpacity={0.75}
             onPress={handlePromptReset}
-            style={[
-              styles.iconBtn,
-              {
-                backgroundColor: theme.colors.surface,
-                borderColor: theme.colors.surfaceBorder,
-                marginLeft: 7,
-              },
-            ]}
+            style={styles.iconBtn}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityRole="button"
+            accessibilityLabel="Новая тусовка"
           >
             <Ionicons
               name="refresh-outline"
@@ -215,14 +168,7 @@ export const Header: React.FC = () => {
         <TouchableOpacity
           activeOpacity={0.8}
           onPress={handleOpenEdit}
-          style={[
-            styles.partyNameBanner,
-            {
-              backgroundColor: theme.colors.surface,
-              borderColor: theme.colors.surfaceBorder,
-              flex: 1,
-            },
-          ]}
+          style={styles.partyNameBanner}
         >
           <View style={styles.partyNameLeft}>
             <Ionicons
@@ -231,10 +177,7 @@ export const Header: React.FC = () => {
               color={theme.colors.primary}
               style={{ marginRight: 6 }}
             />
-            <Text
-              style={[styles.partyNameText, { color: theme.colors.textPrimary }]}
-              numberOfLines={1}
-            >
+            <Text style={styles.partyNameText} numberOfLines={1}>
               {currentParty.title || 'Нажмите, чтобы задать название'}
             </Text>
           </View>
@@ -249,13 +192,7 @@ export const Header: React.FC = () => {
         {currentParty.code && (
           <TouchableOpacity
             onPress={() => setIsCloudModalOpen(true)}
-            style={[
-              styles.roomCodeBadge,
-              {
-                backgroundColor: `${theme.colors.neonCyan}18`,
-                borderColor: theme.colors.neonCyan,
-              },
-            ]}
+            style={styles.roomCodeBadge}
             activeOpacity={0.8}
           >
             <Ionicons
@@ -264,47 +201,51 @@ export const Header: React.FC = () => {
               color={theme.colors.neonCyan}
               style={{ marginRight: 4 }}
             />
-            <Text
-              style={[styles.roomCodeText, { color: theme.colors.neonCyan }]}
-            >
+            <Text style={styles.roomCodeText}>
               {currentParty.code}
             </Text>
           </TouchableOpacity>
         )}
       </View>
 
-      {/* Edit Party Title Modal */}
+      {/* Edit Party Title Modal - Positioned in the upper-third of the screen so keyboard never covers it */}
       <Modal
         visible={isEditModalOpen}
         transparent
         animationType="fade"
         onRequestClose={() => setIsEditModalOpen(false)}
+        statusBarTranslucent
       >
-        <View
-          style={[
-            styles.modalOverlay,
-            { backgroundColor: theme.colors.overlay },
-          ]}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.renameOverlay}
         >
-          <View
-            style={[
-              styles.modalContent,
-              {
-                backgroundColor: theme.colors.surfaceElevated,
-                borderColor: theme.colors.surfaceBorderActive,
-              },
-            ]}
-          >
-            <Text
-              style={[styles.modalTitle, { color: theme.colors.textPrimary }]}
-            >
-              Название события
-            </Text>
-            <Text
-              style={[styles.modalSubtitle, { color: theme.colors.textSecondary }]}
-            >
-              Это название будет отображаться в сообщениях должникам и в чеке
-            </Text>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setIsEditModalOpen(false)}
+            accessibilityRole="button"
+            accessibilityLabel="Закрыть"
+          />
+          <View style={styles.renameCard}>
+            <View style={styles.renameCardHeader}>
+              <View style={styles.renameIconCircle}>
+                <Ionicons name="sparkles" size={18} color={theme.colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.modalTitle}>Название тусовки</Text>
+                <Text style={styles.modalSubtitle}>
+                  Отображается в сообщениях должникам и чеках
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setIsEditModalOpen(false)}
+                style={styles.closeBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Закрыть"
+              >
+                <Ionicons name="close" size={22} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
 
             <Input
               value={tempTitle}
@@ -312,6 +253,8 @@ export const Header: React.FC = () => {
               placeholder="Например: Бар «Руки Вверх», ДР Сани..."
               autoFocus
               clearButton
+              onSubmitEditing={handleSaveTitle}
+              returnKeyType="done"
             />
 
             <View style={styles.modalActions}>
@@ -331,141 +274,202 @@ export const Header: React.FC = () => {
               />
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
-
-      {/* Theme Selector Modal */}
-      <ThemeSelectorModal
-        visible={isThemeModalOpen}
-        onClose={() => setIsThemeModalOpen(false)}
-      />
 
       {/* Cloud Sync Modal */}
       <CloudSyncModal
         visible={isCloudModalOpen}
         onClose={() => setIsCloudModalOpen(false)}
       />
+
+      {/* Notification Center Modal */}
+      <NotificationCenterModal
+        visible={isNotificationsOpen}
+        onClose={() => setIsNotificationsOpen(false)}
+      />
     </View>
   );
 };
 
-const styles = StyleSheet.create({
-  headerContainer: {
-    paddingTop: Platform.OS === 'web' ? 16 : 10,
-    paddingHorizontal: 16,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-  },
-  topRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 10,
-  },
-  brandRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  logoPill: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 9,
-  },
-  brandTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    letterSpacing: -0.3,
-  },
-  brandSubtitle: {
-    fontSize: 10,
-    fontWeight: '600',
-    marginTop: -1,
-  },
-  actionsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  iconBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 9,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-  },
-  activeCloudDot: {
-    position: 'absolute',
-    top: 5,
-    right: 5,
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  bannerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  partyNameBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-  },
-  partyNameLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-    marginRight: 8,
-  },
-  partyNameText: {
-    fontSize: 13,
-    fontWeight: '600',
-    flex: 1,
-  },
-  roomCodeBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 12,
-    borderWidth: 1,
-  },
-  roomCodeText: {
-    fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
-  modalOverlay: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  modalContent: {
-    width: '100%',
-    borderRadius: 20,
-    padding: 20,
-    borderWidth: 1.5,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    marginBottom: 4,
-  },
-  modalSubtitle: {
-    fontSize: 13,
-    marginBottom: 16,
-  },
-  modalActions: {
-    flexDirection: 'row',
-    marginTop: 8,
-  },
-});
+function createStyles(theme: ThemeTokens) {
+  return StyleSheet.create({
+    headerContainer: {
+      backgroundColor: theme.colors.background,
+      paddingTop: Platform.OS === 'web' ? 16 : 10,
+      paddingHorizontal: 16,
+      paddingBottom: 12,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.colors.surfaceBorder,
+    },
+    topRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 10,
+    },
+    brandRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    logoPill: {
+      width: 32,
+      height: 32,
+      borderRadius: 10,
+      backgroundColor: theme.colors.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 9,
+    },
+    brandTitle: {
+      fontSize: 18,
+      fontWeight: '800',
+      letterSpacing: -0.3,
+      color: theme.colors.textPrimary,
+    },
+    brandSubtitle: {
+      fontSize: 10,
+      fontWeight: '600',
+      marginTop: -1,
+      color: theme.colors.primaryLight,
+    },
+    actionsRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+    },
+    iconBtn: {
+      width: 34,
+      height: 34,
+      borderRadius: 9,
+      borderWidth: 1,
+      backgroundColor: theme.colors.surface,
+      borderColor: theme.colors.surfaceBorder,
+      alignItems: 'center',
+      justifyContent: 'center',
+      position: 'relative',
+    },
+    iconBtnConnected: {
+      borderColor: theme.colors.neonCyan,
+    },
+    activeCloudDot: {
+      position: 'absolute',
+      top: 5,
+      right: 5,
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+      backgroundColor: theme.colors.neonCyan,
+    },
+    unreadBadge: {
+      position: 'absolute',
+      top: -3,
+      right: -3,
+      minWidth: 16,
+      height: 16,
+      borderRadius: 8,
+      backgroundColor: theme.colors.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 3,
+      borderWidth: 1.5,
+      borderColor: theme.colors.background,
+    },
+    unreadBadgeText: {
+      color: theme.colors.textInverse,
+      fontSize: 9,
+      fontWeight: '800',
+    },
+    bannerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+    },
+    partyNameBanner: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      borderWidth: 1,
+      borderRadius: 12,
+      backgroundColor: theme.colors.surface,
+      borderColor: theme.colors.surfaceBorder,
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+    },
+    partyNameLeft: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      flex: 1,
+      marginRight: 8,
+    },
+    partyNameText: {
+      fontSize: 13,
+      fontWeight: '600',
+      flex: 1,
+      color: theme.colors.textPrimary,
+    },
+    roomCodeBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+      borderRadius: 12,
+      borderWidth: 1,
+      backgroundColor: `${theme.colors.neonCyan}18`,
+      borderColor: theme.colors.neonCyan,
+    },
+    roomCodeText: {
+      fontSize: 12,
+      fontWeight: '800',
+      letterSpacing: 0.5,
+      color: theme.colors.neonCyan,
+    },
+    renameOverlay: {
+      flex: 1,
+      backgroundColor: theme.colors.overlay,
+      justifyContent: 'flex-start',
+      paddingTop: Platform.OS === 'android' ? 88 : 100,
+      paddingHorizontal: 20,
+    },
+    renameCard: {
+      backgroundColor: theme.colors.surfaceElevated,
+      borderRadius: theme.borderRadius.xl,
+      borderWidth: 1.5,
+      borderColor: theme.colors.surfaceBorderActive,
+      padding: 20,
+      ...theme.shadows.card,
+    },
+    renameCardHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      marginBottom: 14,
+    },
+    renameIconCircle: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      backgroundColor: `${theme.colors.primary}18`,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    closeBtn: {
+      padding: 4,
+    },
+    modalTitle: {
+      fontSize: 17,
+      fontWeight: '700',
+      color: theme.colors.textPrimary,
+    },
+    modalSubtitle: {
+      fontSize: 12,
+      marginTop: 2,
+      color: theme.colors.textSecondary,
+    },
+    modalActions: {
+      flexDirection: 'row',
+      marginTop: 14,
+    },
+  });
+}

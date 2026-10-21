@@ -24,6 +24,7 @@ interface InputProps extends TextInputProps {
   containerStyle?: ViewStyle;
   inputStyle?: TextStyle;
   clearButton?: boolean;
+  inputRef?: React.Ref<React.ElementRef<typeof TextInput>>;
 }
 
 export const Input: React.FC<InputProps> = ({
@@ -38,8 +39,11 @@ export const Input: React.FC<InputProps> = ({
   containerStyle,
   inputStyle,
   clearButton = false,
+  inputRef,
   value,
   onChangeText,
+  onFocus,
+  onBlur,
   ...restProps
 }) => {
   const { theme } = useTheme();
@@ -74,10 +78,17 @@ export const Input: React.FC<InputProps> = ({
         )}
         {prefix && <Text style={styles.affixText}>{prefix}</Text>}
         <TextInput
+          ref={inputRef}
           style={[styles.input, inputStyle]}
           placeholderTextColor={theme.colors.textMuted}
-          onFocus={() => setIsFocused(true)}
-          onBlur={() => setIsFocused(false)}
+          onFocus={(event) => {
+            setIsFocused(true);
+            onFocus?.(event);
+          }}
+          onBlur={(event) => {
+            setIsFocused(false);
+            onBlur?.(event);
+          }}
           value={value}
           onChangeText={onChangeText}
           selectionColor={theme.colors.primary}

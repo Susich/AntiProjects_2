@@ -1,23 +1,23 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
-  Modal,
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  KeyboardAvoidingView,
-  Platform,
+  Keyboard,
+  TouchableWithoutFeedback,
+  NativeSyntheticEvent,
+  NativeScrollEvent,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemeTokens, useTheme } from '../../context/ThemeContext';
-import { ExpenseItem, ItemCategory, ParticipantProfile } from '../../types';
+import { ExpenseItem, ItemCategory, UserProfile } from '../../types';
 import { usePartyStore } from '../../store/usePartyStore';
 import { Input } from '../common/Input';
 import { Button } from '../common/Button';
+import { BottomSheetModal } from '../common/BottomSheetModal';
 import { formatPhone, formatRubles, getInitials } from '../../utils/currency';
-import { addExpenseToCloud } from '../../api/googleSheets';
 import { useToast } from '../common/Toast';
 
 interface AddItemModalProps {
@@ -39,29 +39,38 @@ export const AddItemModal: React.FC<AddItemModalProps> = ({
   onClose,
   editItem,
 }) => (
-  <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-    {visible ? <AddItemForm onClose={onClose} editItem={editItem} /> : null}
-  </Modal>
+  <BottomSheetModal
+    visible={visible}
+    onClose={onClose}
+    height="88%"
+    maxHeight="92%"
+  >
+    {({ onScroll }) => (
+      <AddItemForm onClose={onClose} editItem={editItem} onScroll={onScroll} />
+    )}
+  </BottomSheetModal>
 );
 
-const AddItemForm: React.FC<Omit<AddItemModalProps, 'visible'>> = ({
+interface AddItemFormProps extends Omit<AddItemModalProps, 'visible'> {
+  onScroll?: (e: NativeSyntheticEvent<NativeScrollEvent>) => void;
+}
+
+const AddItemForm: React.FC<AddItemFormProps> = ({
   onClose,
   editItem,
+  onScroll,
 }) => {
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
-  const insets = useSafeAreaInsets();
 
   const currentParty = usePartyStore((s) => s.currentParty);
-  const savedProfiles = usePartyStore((s) => s.savedProfiles);
   const addExpense = usePartyStore((s) => s.addExpense);
   const updateExpense = usePartyStore((s) => s.updateExpense);
   const { showToast } = useToast();
 
-  // Resolve active participants for current party
-  const partyProfiles = currentParty.participants
-    .map((id) => savedProfiles.find((p) => p.id === id))
-    .filter(Boolean) as ParticipantProfile[];
+  // Participants are authenticated users returned by the room; there is no
+  // separate local address book to resolve.
+  const partyProfiles: UserProfile[] = currentParty.participants || [];
 
   // Mounted only while the modal is open, so these initializers give us a
   // fresh form on every open without a setState-in-effect round trip.
@@ -157,27 +166,17 @@ const AddItemForm: React.FC<Omit<AddItemModalProps, 'visible'>> = ({
         selectedConsumerIds,
         category
       );
-      if (currentParty.code && created) {
-        addExpenseToCloud(currentParty.id, {
-          // Reuse the local id so every device edits the same sheet row.
-          id: created.id,
-          title: trimmedTitle,
-          amount: numAmount,
-          paidById,
-          sharedUserIds: selectedConsumerIds,
-          category,
-        })
-          .then((res) => {
-            if (res.success) {
-              showToast(`«${trimmedTitle}» отправлено в Google Sheets!`, {
-                type: 'success',
-              });
-            }
-          })
-          .catch((err) => console.warn('[Cloud] Auto-sync expense error:', err));
-      } else {
-        showToast(`«${trimmedTitle}» добавлено в чек!`);
+      if (!created) {
+        setErrors({
+          paidBy: 'Не удалось сохранить расход. Проверьте участников комнаты.',
+        });
+        return;
       }
+      showToast(
+        currentParty.code
+          ? `«${trimmedTitle}» добавлено и отправляется в Google Sheets`
+          : `«${trimmedTitle}» добавлено в чек!`
+      );
     }
 
     onClose();
@@ -190,90 +189,103 @@ const AddItemForm: React.FC<Omit<AddItemModalProps, 'visible'>> = ({
       : 0;
 
   const selectedPayer = partyProfiles.find((p) => p.id === paidById);
+  const scrollRef = useRef<any>(null);
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={styles.overlay}
-    >
-      <View style={[styles.sheetContainer, { paddingBottom: Math.max(insets.bottom, 20) }]}>
-          {/* Header */}
-          <View style={styles.sheetHeader}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.sheetTitle}>
-                {editItem ? 'Редактировать расход' : 'Новый расход в чеке'}
-              </Text>
-              <Text style={styles.sheetSubtitle}>
-                Укажите, кто оплатил счёт и кто в нём участвовал
-              </Text>
-            </View>
-            <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-              <Ionicons name="close" size={22} color={theme.colors.textSecondary} />
-            </TouchableOpacity>
+    <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+      <View style={styles.formContainer}>
+        {/* Header */}
+        <View style={styles.sheetHeader}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.sheetTitle}>
+              {editItem ? 'Редактировать расход' : 'Новый расход в чеке'}
+            </Text>
+            <Text style={styles.sheetSubtitle}>
+              Укажите, кто оплатил счёт и кто в нём участвовал
+            </Text>
           </View>
+          <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
+            <Ionicons name="close" size={22} color={theme.colors.textSecondary} />
+          </TouchableOpacity>
+        </View>
 
-          <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 540 }}>
-            {/* Category Selector */}
-            <Text style={styles.fieldLabel}>Категория</Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.categoryRow}
-            >
-              {CATEGORIES.map((cat) => {
-                const isSelected = category === cat.id;
-                return (
-                  <TouchableOpacity
-                    key={cat.id}
-                    onPress={() => setCategory(cat.id)}
-                    style={[styles.categoryPill, isSelected && styles.categoryPillActive]}
-                    activeOpacity={0.7}
+        <ScrollView
+          ref={scrollRef}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          style={styles.mainScroll}
+          contentContainerStyle={styles.mainScrollContent}
+          onScroll={onScroll}
+          scrollEventThrottle={16}
+        >
+          {/* Category Selector */}
+          <Text style={styles.fieldLabel}>Категория</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.categoryRow}
+          >
+            {CATEGORIES.map((cat) => {
+              const isSelected = category === cat.id;
+              return (
+                <TouchableOpacity
+                  key={cat.id}
+                  onPress={() => setCategory(cat.id)}
+                  style={[styles.categoryPill, isSelected && styles.categoryPillActive]}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name={cat.icon as any}
+                    size={15}
+                    color={isSelected ? theme.colors.textInverse : theme.colors.textSecondary}
+                    style={{ marginRight: 5 }}
+                  />
+                  <Text
+                    style={[
+                      styles.categoryText,
+                      isSelected && styles.categoryTextActive,
+                    ]}
                   >
-                    <Ionicons
-                      name={cat.icon as any}
-                      size={15}
-                      color={isSelected ? theme.colors.textInverse : theme.colors.textSecondary}
-                      style={{ marginRight: 5 }}
-                    />
-                    <Text
-                      style={[
-                        styles.categoryText,
-                        isSelected && styles.categoryTextActive,
-                      ]}
-                    >
-                      {cat.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
+                    {cat.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
 
-            {/* Title & Amount */}
-            <Input
-              label="Название чека / блюда *"
-              placeholder="Например: Сет роллов, Счёт в баре, Такси..."
-              value={title}
-              onChangeText={(text) => {
-                setTitle(text);
-                if (errors.title) setErrors((prev) => ({ ...prev, title: undefined }));
-              }}
-              error={errors.title}
-              leftIcon="receipt-outline"
-            />
+          {/* Title & Amount */}
+          <Input
+            label="Название чека / блюда *"
+            placeholder="Например: Сет роллов, Счёт в баре, Такси..."
+            value={title}
+            onFocus={() => {
+              scrollRef.current?.scrollTo({ y: 0, animated: true });
+            }}
+            onChangeText={(text) => {
+              setTitle(text);
+              if (errors.title) setErrors((prev) => ({ ...prev, title: undefined }));
+            }}
+            error={errors.title}
+            leftIcon="receipt-outline"
+          />
 
-            <Input
-              label="Сумма расхода (₽) *"
-              placeholder="2500"
-              keyboardType="decimal-pad"
-              value={amount}
-              onChangeText={(text) => {
-                setAmount(text);
-                if (errors.amount) setErrors((prev) => ({ ...prev, amount: undefined }));
-              }}
-              error={errors.amount}
-              leftIcon="cash-outline"
-              suffix="₽"
-            />
+          <Input
+            label="Сумма расхода (₽) *"
+            placeholder="2500"
+            keyboardType="decimal-pad"
+            value={amount}
+            onFocus={() => {
+              scrollRef.current?.scrollTo({ y: 80, animated: true });
+            }}
+            onChangeText={(text) => {
+              setAmount(text);
+              if (errors.amount) setErrors((prev) => ({ ...prev, amount: undefined }));
+            }}
+            error={errors.amount}
+            leftIcon="cash-outline"
+            suffix="₽"
+          />
 
             {/* Requirement 1: "Кто оплатил" Selector */}
             <View style={styles.sectionHeaderRow}>
@@ -285,9 +297,10 @@ const AddItemForm: React.FC<Omit<AddItemModalProps, 'visible'>> = ({
                     <Text style={{ color: theme.colors.primary, fontWeight: '700' }}>
                       {selectedPayer.name}
                     </Text>
-                    {selectedPayer.paymentInfo.phone
-                      ? ` · ${formatPhone(selectedPayer.paymentInfo.phone)}`
+                    {selectedPayer.phone
+                      ? ` · ${formatPhone(selectedPayer.phone)}`
                       : ''}
+                    {selectedPayer.bank ? ` · ${selectedPayer.bank}` : ''}
                   </Text>
                 )}
               </View>
@@ -309,7 +322,7 @@ const AddItemForm: React.FC<Omit<AddItemModalProps, 'visible'>> = ({
               <View style={styles.noParticipantsNotice}>
                 <Ionicons name="warning-outline" size={20} color={theme.colors.warning} />
                 <Text style={styles.noParticipantsText}>
-                  Добавьте участников в тусовку, чтобы выбрать плательщика!
+                  В комнате нет авторизованных участников. Подключите общую комнату по коду.
                 </Text>
               </View>
             ) : (
@@ -350,16 +363,15 @@ const AddItemForm: React.FC<Omit<AddItemModalProps, 'visible'>> = ({
                           style={[
                             styles.payerPhone,
                             {
-                              color: p.paymentInfo.phone
+                              color: p.phone
                                 ? theme.colors.textMuted
                                 : theme.colors.warning,
                             },
                           ]}
                           numberOfLines={1}
                         >
-                          {p.paymentInfo.phone
-                            ? formatPhone(p.paymentInfo.phone)
-                            : 'СБП не указан'}
+                          {p.bank}
+                          {p.phone ? ` · ${formatPhone(p.phone)}` : ' · телефон не указан'}
                         </Text>
                       </View>
 
@@ -487,13 +499,25 @@ const AddItemForm: React.FC<Omit<AddItemModalProps, 'visible'>> = ({
               style={{ flex: 1.8 }}
             />
           </View>
-      </View>
-    </KeyboardAvoidingView>
-  );
-};
+        </View>
+      </TouchableWithoutFeedback>
+    );
+  };
 
-const createStyles = (theme: ThemeTokens) =>
-  StyleSheet.create({
+  const createStyles = (theme: ThemeTokens) =>
+    StyleSheet.create({
+      formContainer: {
+        flex: 1,
+        width: '100%',
+        paddingHorizontal: 20,
+        paddingTop: 4,
+      },
+      mainScroll: {
+        flex: 1,
+      },
+      mainScrollContent: {
+        paddingBottom: 28,
+      },
     overlay: {
       flex: 1,
       backgroundColor: theme.colors.overlay,
@@ -725,8 +749,10 @@ const createStyles = (theme: ThemeTokens) =>
     },
     sheetActions: {
       flexDirection: 'row',
-      marginTop: 14,
+      alignItems: 'center',
+      marginTop: 12,
       paddingTop: 12,
+      paddingBottom: 4,
       borderTopWidth: 1,
       borderTopColor: theme.colors.surfaceBorder,
     },

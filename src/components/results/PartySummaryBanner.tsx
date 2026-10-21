@@ -5,8 +5,9 @@ import { ThemeTokens, useTheme } from '../../context/ThemeContext';
 import { DebtCalculationResult } from '../../types';
 import { formatRubles } from '../../utils/currency';
 import { generatePartySettlementSummary } from '../../utils/shareText';
-import { copyToClipboard } from '../../utils/deepLinks';
+import { copyToClipboard } from '../../utils/clipboard';
 import { useToast } from '../common/Toast';
+import { AnimatedNumber } from '../common/AnimatedNumber';
 
 interface PartySummaryBannerProps {
   calculation: DebtCalculationResult;
@@ -51,7 +52,11 @@ export const PartySummaryBanner: React.FC<PartySummaryBannerProps> = ({
       <View style={styles.topRow}>
         <View style={{ flex: 1 }}>
           <Text style={styles.bannerLabel}>ОБЩИЕ РАСХОДЫ</Text>
-          <Text style={styles.grandTotalText}>{formatRubles(calculation.totalExpenses)}</Text>
+          <AnimatedNumber
+            value={calculation.totalExpenses}
+            formatter={formatRubles}
+            style={styles.grandTotalText}
+          />
         </View>
 
         <TouchableOpacity
@@ -90,16 +95,23 @@ export const PartySummaryBanner: React.FC<PartySummaryBannerProps> = ({
       {/* Progress of Transfers Settlement */}
       <View style={styles.progressSection}>
         <View style={styles.progressLabels}>
-          <Text style={styles.collectedText}>
-            Оплачено:{' '}
-            <Text style={styles.collectedNumber}>
-              {formatRubles(calculation.totalSettledAmount)}
-            </Text>{' '}
-            ({progressPercent}%)
-          </Text>
-          <Text style={styles.pendingText}>
-            Ожидает: {formatRubles(calculation.totalPendingAmount)}
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Text style={styles.collectedText}>Оплачено: </Text>
+            <AnimatedNumber
+              value={calculation.totalSettledAmount}
+              formatter={formatRubles}
+              style={styles.collectedNumber}
+            />
+            <Text style={styles.collectedText}> ({progressPercent}%)</Text>
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Text style={styles.pendingText}>Ожидает: </Text>
+            <AnimatedNumber
+              value={calculation.totalPendingAmount}
+              formatter={formatRubles}
+              style={styles.pendingText}
+            />
+          </View>
         </View>
 
         <View style={styles.progressBarTrack}>

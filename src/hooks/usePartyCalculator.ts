@@ -1,10 +1,10 @@
 import { useMemo } from 'react';
-import { DebtCalculationResult, ExpenseItem, ParticipantProfile } from '../types';
+import { DebtCalculationResult, ExpenseItem, UserProfile } from '../types';
 import { calculateBalances } from '../utils/debtSimplification';
 
 interface UsePartyCalculatorParams {
   expenses: ExpenseItem[];
-  participants: ParticipantProfile[];
+  participants: UserProfile[];
   settledTransferIds?: string[];
 }
 
