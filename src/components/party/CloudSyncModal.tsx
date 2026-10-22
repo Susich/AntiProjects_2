@@ -360,10 +360,6 @@ const CloudSyncContent: React.FC<{
     if (isSharing || !currentParty.code) return;
     setIsSharing(true);
     try {
-      showToast(`Приглашение и код ${currentParty.code} скопированы! Прикрепляем QR-код...`, {
-        type: 'success',
-        icon: 'copy-outline',
-      });
       await sharePartyInvite({
         partyCode: currentParty.code,
         partyTitle: currentParty.title,

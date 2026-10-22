@@ -44,7 +44,7 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "test": "node --test tests/semver.test.ts tests/debtSync.test.ts",
-    "postinstall": "node scripts/patch-expo-notifications.js"
+    "postinstall": "node scripts/patch-expo-notifications.js && node scripts/patch-expo-sharing.js"
   },
   "private": true
 }

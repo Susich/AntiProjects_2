@@ -1,7 +1,6 @@
-import { Share } from 'react-native';
+import { Platform, Share } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
-import { copyToClipboard } from './clipboard';
 import { triggerImpact } from './haptics';
 
 export interface SharePartyInviteParams {
@@ -19,8 +18,8 @@ export function generatePartyInviteText(title: string, code: string): string {
 }
 
 /**
- * Shares QR code PNG image along with copying friendly invitation text to clipboard
- * and invoking system share sheet with invitation title.
+ * Shares QR code PNG image along with the invitation message text directly in the system share intent.
+ * Does not pollute clipboard - sends image and text simultaneously.
  */
 export async function sharePartyInvite({
   partyCode,
@@ -46,18 +45,40 @@ export async function sharePartyInvite({
     hasFile = false;
   }
 
-  const isSharingAvailable = await Sharing.isAvailableAsync();
+  // On iOS, React Native's Share.share({ message, url }) natively attaches both
+  // the text message and the image file to UIActivityViewController in all environments.
+  if (Platform.OS === 'ios' && hasFile) {
+    try {
+      await Share.share({
+        message: inviteText,
+        url: fileUri,
+      });
+      return true;
+    } catch {
+      // Fallback to Sharing.shareAsync below if needed
+    }
+  }
+
+  const isSharingAvailable = await Sharing.isAvailableAsync().catch(() => false);
 
   if (hasFile && isSharingAvailable) {
-    await copyToClipboard(inviteText);
-    await Sharing.shareAsync(fileUri, {
-      mimeType: 'image/png',
-      dialogTitle: `🎉 Приглашаю на тусовку «${partyTitle || 'PartySplit'}» (Код: ${partyCode})`,
-      UTI: 'public.png',
-    });
-    return true;
-  } else {
-    await Share.share({ message: inviteText });
-    return true;
+    try {
+      await Sharing.shareAsync(fileUri, {
+        mimeType: 'image/png',
+        dialogTitle: `🎉 Приглашаю на тусовку «${partyTitle || 'PartySplit'}» (Код: ${partyCode})`,
+        UTI: 'public.png',
+        message: inviteText,
+      });
+      return true;
+    } catch {
+      // Fallback to pure text share below
+    }
   }
+
+  // Fallback to sharing the invite text directly if file sharing was unavailable
+  await Share.share({
+    message: inviteText,
+    title: `Приглашение в тусовку «${partyTitle || 'PartySplit'}»`,
+  });
+  return true;
 }

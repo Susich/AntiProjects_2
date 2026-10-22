@@ -1,7 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import {
-  Platform,
-  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -11,10 +9,6 @@ import QRCode from 'react-native-qrcode-svg';
 import { Ionicons } from '@expo/vector-icons';
 import { ThemeTokens, useTheme } from '../../context/ThemeContext';
 import { BottomSheetModal } from '../common/BottomSheetModal';
-import { Button } from '../common/Button';
-import { copyToClipboard } from '../../utils/clipboard';
-import { triggerImpact } from '../../utils/haptics';
-import { useToast } from '../common/Toast';
 
 interface RoomQrModalProps {
   visible: boolean;
@@ -33,8 +27,6 @@ export const RoomQrModal: React.FC<RoomQrModalProps> = ({
 }) => {
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
-  const { showToast } = useToast();
-  const [copied, setCopied] = useState(false);
 
   // Universal deep-link payload
   const qrPayload = useMemo(() => {
@@ -42,114 +34,74 @@ export const RoomQrModal: React.FC<RoomQrModalProps> = ({
     return `partysplit://join/${target}`;
   }, [partyCode, partyId]);
 
-  const handleCopyCode = async () => {
-    void triggerImpact();
-    const ok = await copyToClipboard(partyCode);
-    if (ok) {
-      setCopied(true);
-      showToast('Код комнаты скопирован! 📋', { type: 'success' });
-      setTimeout(() => setCopied(false), 2000);
-    } else {
-      showToast('Не удалось скопировать код', { type: 'error' });
-    }
-  };
-
   return (
     <BottomSheetModal
       visible={visible}
       onClose={onClose}
-      maxHeight="96%"
-      height="92%"
+      height="auto"
+      maxHeight="85%"
     >
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.scrollContent}
-        style={styles.scrollView}
-        bounces={false}
-      >
-        <View style={styles.container}>
-          {/* Header */}
-          <View style={styles.header}>
-            <View style={styles.headerLeft}>
-              <View style={styles.headerIcon}>
-                <Ionicons name="qr-code" size={20} color={theme.colors.neonCyan} />
-              </View>
-              <View style={styles.headerTextWrap}>
-                <Text style={styles.headerTitle}>QR-код комнаты</Text>
-                <Text style={styles.headerSubtitle} numberOfLines={1}>
-                  {partyTitle || 'Тусовка'}
-                </Text>
-              </View>
+      <View style={styles.container}>
+        {/* Header */}
+        <View style={styles.header}>
+          <View style={styles.headerLeft}>
+            <View style={styles.headerIcon}>
+              <Ionicons name="qr-code" size={20} color={theme.colors.neonCyan} />
             </View>
-            <TouchableOpacity
-              style={styles.closeBtn}
-              onPress={onClose}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <Ionicons name="close" size={20} color={theme.colors.textMuted} />
-            </TouchableOpacity>
-          </View>
-
-          {/* QR Code Container */}
-          <View style={styles.qrCard}>
-            <View style={styles.qrWrapper}>
-              {partyCode ? (
-                <QRCode
-                  value={qrPayload}
-                  size={220}
-                  color="#0B0E14"
-                  backgroundColor="#FFFFFF"
-                  logoSize={36}
-                  logoMargin={4}
-                  logoBorderRadius={10}
-                  quietZone={14}
-                />
-              ) : (
-                <View style={styles.qrPlaceholder}>
-                  <Ionicons name="alert-circle-outline" size={40} color={theme.colors.warning} />
-                  <Text style={styles.qrPlaceholderText}>Код комнаты отсутствует</Text>
-                </View>
-              )}
+            <View style={styles.headerTextWrap}>
+              <Text style={styles.headerTitle}>QR-код комнаты</Text>
+              <Text style={styles.headerSubtitle} numberOfLines={1}>
+                {partyTitle || 'Тусовка'}
+              </Text>
             </View>
-            <Text style={styles.qrHint}>
-              Наведите камеру в приложении PartySplit для мгновенного входа
-            </Text>
           </View>
-
-          {/* Text Code Block */}
-          <View style={styles.codeBlock}>
-            <Text style={styles.codeBlockLabel}>КОД ДЛЯ ВХОДА ВРУЧНУЮ</Text>
-            <Text style={styles.codeBlockValue} selectable>
-              {partyCode || '—'}
-            </Text>
-
-            <Button
-              title={copied ? 'Скопировано!' : 'Скопировать код'}
-              icon={copied ? 'checkmark-circle' : 'copy-outline'}
-              variant="primary"
-              size="lg"
-              onPress={handleCopyCode}
-              style={copied ? { ...styles.actionBtn, ...styles.actionBtnCopied } : styles.actionBtn}
-            />
-          </View>
+          <TouchableOpacity
+            style={styles.closeBtn}
+            onPress={onClose}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            accessibilityRole="button"
+            accessibilityLabel="Закрыть"
+          >
+            <Ionicons name="close" size={20} color={theme.colors.textMuted} />
+          </TouchableOpacity>
         </View>
-      </ScrollView>
+
+        {/* QR Code Container */}
+        <View style={styles.qrCard}>
+          <View style={styles.qrWrapper}>
+            {partyCode ? (
+              <QRCode
+                value={qrPayload}
+                size={230}
+                color="#0B0E14"
+                backgroundColor="#FFFFFF"
+                logoSize={36}
+                logoMargin={4}
+                logoBorderRadius={10}
+                quietZone={14}
+              />
+            ) : (
+              <View style={styles.qrPlaceholder}>
+                <Ionicons name="alert-circle-outline" size={40} color={theme.colors.warning} />
+                <Text style={styles.qrPlaceholderText}>Код комнаты отсутствует</Text>
+              </View>
+            )}
+          </View>
+          <Text style={styles.qrHint}>
+            Наведите камеру в приложении PartySplit для мгновенного входа
+          </Text>
+        </View>
+      </View>
     </BottomSheetModal>
   );
 };
 
 function createStyles(theme: ThemeTokens) {
   return StyleSheet.create({
-    scrollView: {
-      flex: 1,
-      width: '100%',
-    },
-    scrollContent: {
-      paddingBottom: 24,
-    },
     container: {
       paddingHorizontal: 20,
       paddingTop: 2,
+      paddingBottom: 24,
       alignItems: 'center',
     },
     header: {
@@ -160,7 +112,7 @@ function createStyles(theme: ThemeTokens) {
       paddingBottom: 16,
       borderBottomWidth: 1,
       borderBottomColor: `${theme.colors.surfaceBorder}60`,
-      marginBottom: 18,
+      marginBottom: 20,
     },
     headerLeft: {
       flexDirection: 'row',
@@ -228,8 +180,8 @@ function createStyles(theme: ThemeTokens) {
       elevation: 4,
     },
     qrPlaceholder: {
-      width: 220,
-      height: 220,
+      width: 230,
+      height: 230,
       alignItems: 'center',
       justifyContent: 'center',
       gap: 12,
@@ -243,35 +195,9 @@ function createStyles(theme: ThemeTokens) {
       fontSize: 12,
       color: theme.colors.textSecondary,
       textAlign: 'center',
-      marginTop: 14,
-      lineHeight: 17,
-      paddingHorizontal: 12,
-    },
-    codeBlock: {
-      width: '100%',
-      marginTop: 18,
-      alignItems: 'center',
-    },
-    codeBlockLabel: {
-      fontSize: 11,
-      fontWeight: '700',
-      color: theme.colors.textMuted,
-      letterSpacing: 1.1,
-      marginBottom: 6,
-    },
-    codeBlockValue: {
-      fontSize: 32,
-      fontWeight: '900',
-      letterSpacing: 4,
-      color: theme.colors.neonCyan,
-      fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-      marginBottom: 16,
-    },
-    actionBtn: {
-      width: '100%',
-    },
-    actionBtnCopied: {
-      borderColor: theme.colors.success,
+      marginTop: 16,
+      lineHeight: 18,
+      paddingHorizontal: 16,
     },
   });
 }
