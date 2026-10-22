@@ -921,18 +921,21 @@ function buildPartyDetailsPayload(ss, party, memberData) {
   var shoppingSheet = getOrCreateShoppingSheet(ss);
   var shopRows = readSheetRows(shoppingSheet, 11);
   var shoppingList = [];
+  var currentPartyId = (party.id || '').toString().trim();
   for (var sh = 0; sh < shopRows.length; sh++) {
-    if ((shopRows[sh][1] || '').toString() !== party.id) continue;
+    var rowPartyId = (shopRows[sh][1] || '').toString().trim();
+    if (rowPartyId !== currentPartyId) continue;
     var estAmt = Number(shopRows[sh][3]);
     var actAmt = Number(shopRows[sh][7]);
+    var rawBought = (shopRows[sh][5] || '').toString().trim().toLowerCase();
+    var isBought = shopRows[sh][5] === true || rawBought === 'true' || rawBought === '1';
     shoppingList.push({
       id: (shopRows[sh][0] || '').toString(),
-      partyId: party.id,
+      partyId: currentPartyId,
       title: (shopRows[sh][2] || '').toString(),
       estimatedAmount: !isNaN(estAmt) && estAmt > 0 ? estAmt : undefined,
       assignedUserId: (shopRows[sh][4] || '').toString() || undefined,
-      isBought: shopRows[sh][5] === true ||
-        (shopRows[sh][5] || '').toString().toLowerCase() === 'true',
+      isBought: isBought,
       boughtById: (shopRows[sh][6] || '').toString() || undefined,
       actualAmount: !isNaN(actAmt) && actAmt > 0 ? actAmt : undefined,
       convertedExpenseId: (shopRows[sh][8] || '').toString() || undefined,
@@ -1049,10 +1052,10 @@ function joinParty(ss, data) {
   var auth = authenticate(ss, data);
   if (auth.error) return errorResponse(auth.error);
 
-  var rawCode = (data.code || '').toString().toUpperCase().trim();
+  var rawCode = (data.code || data.partyId || data.roomId || '').toString().trim();
   if (!rawCode) return errorResponse('Укажите код комнаты');
 
-  var party = findPartyRow(ss, { code: rawCode });
+  var party = findPartyRow(ss, { code: rawCode.toUpperCase(), partyId: rawCode });
   if (!party) {
     return errorResponse('Тусовка с кодом "' + rawCode + '" не найдена. Проверьте код!');
   }

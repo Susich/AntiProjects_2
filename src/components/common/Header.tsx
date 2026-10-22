@@ -18,6 +18,7 @@ import { Button } from './Button';
 import { useToast } from './Toast';
 import { CloudSyncModal } from '../party/CloudSyncModal';
 import { NotificationCenterModal } from '../notifications/NotificationCenterModal';
+import { RoomQrModal } from '../party/RoomQrModal';
 import { useNotificationStore } from '../../store/useNotificationStore';
 
 export const Header: React.FC = () => {
@@ -33,6 +34,7 @@ export const Header: React.FC = () => {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isCloudModalOpen, setIsCloudModalOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [isQrModalOpen, setIsQrModalOpen] = useState(false);
   const [tempTitle, setTempTitle] = useState(currentParty.title);
 
   const handleOpenEdit = () => {
@@ -188,23 +190,34 @@ export const Header: React.FC = () => {
           />
         </TouchableOpacity>
 
-        {/* Room Code Badge (if connected to Google Sheets) */}
+        {/* Room Code Badge & QR Trigger */}
         {currentParty.code && (
-          <TouchableOpacity
-            onPress={() => setIsCloudModalOpen(true)}
-            style={styles.roomCodeBadge}
-            activeOpacity={0.8}
-          >
-            <Ionicons
-              name="people-outline"
-              size={13}
-              color={theme.colors.neonCyan}
-              style={{ marginRight: 4 }}
-            />
-            <Text style={styles.roomCodeText}>
-              {currentParty.code}
-            </Text>
-          </TouchableOpacity>
+          <View style={styles.roomBadgeContainer}>
+            <TouchableOpacity
+              onPress={() => setIsCloudModalOpen(true)}
+              style={styles.roomCodeBadge}
+              activeOpacity={0.8}
+            >
+              <Ionicons
+                name="people-outline"
+                size={13}
+                color={theme.colors.neonCyan}
+                style={{ marginRight: 4 }}
+              />
+              <Text style={styles.roomCodeText}>
+                {currentParty.code}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => setIsQrModalOpen(true)}
+              style={styles.headerQrBtn}
+              activeOpacity={0.8}
+              accessibilityLabel="Показать QR-код"
+            >
+              <Ionicons name="qr-code-outline" size={14} color={theme.colors.neonCyan} />
+            </TouchableOpacity>
+          </View>
         )}
       </View>
 
@@ -287,6 +300,15 @@ export const Header: React.FC = () => {
       <NotificationCenterModal
         visible={isNotificationsOpen}
         onClose={() => setIsNotificationsOpen(false)}
+      />
+
+      {/* Room QR Modal */}
+      <RoomQrModal
+        visible={isQrModalOpen}
+        onClose={() => setIsQrModalOpen(false)}
+        partyCode={currentParty.code || ''}
+        partyTitle={currentParty.title}
+        partyId={currentParty.id}
       />
     </View>
   );
@@ -409,6 +431,11 @@ function createStyles(theme: ThemeTokens) {
       flex: 1,
       color: theme.colors.textPrimary,
     },
+    roomBadgeContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+    },
     roomCodeBadge: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -418,6 +445,16 @@ function createStyles(theme: ThemeTokens) {
       borderWidth: 1,
       backgroundColor: `${theme.colors.neonCyan}18`,
       borderColor: theme.colors.neonCyan,
+    },
+    headerQrBtn: {
+      backgroundColor: `${theme.colors.neonCyan}18`,
+      borderWidth: 1,
+      borderColor: theme.colors.neonCyan,
+      borderRadius: 12,
+      width: 34,
+      height: 34,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
     roomCodeText: {
       fontSize: 12,

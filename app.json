@@ -20,6 +20,7 @@
       },
       "predictiveBackGestureEnabled": false,
       "permissions": [
+        "CAMERA",
         "POST_NOTIFICATIONS",
         "REQUEST_INSTALL_PACKAGES",
         "VIBRATE",
@@ -60,6 +61,12 @@
         {
           "photosPermission": "Разрешите доступ к галерее, чтобы установить фото профиля",
           "cameraPermission": "Разрешите доступ к камере, чтобы сделать фото профиля"
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Камера используется для сканирования QR-кода комнаты."
         }
       ],
       "expo-status-bar"

@@ -26,7 +26,7 @@ import {
   setGoogleScriptUrl,
   testGoogleScriptConnection,
 } from '../../api/googleSheets';
-import { mapCloudExpenses, mapCloudParticipants } from '../../utils/cloudSync';
+import { mapCloudExpenses, mapCloudParticipants, mapCloudShoppingList } from '../../utils/cloudSync';
 import { copyToClipboard } from '../../utils/clipboard';
 import { Input } from '../common/Input';
 import { Button } from '../common/Button';
@@ -34,6 +34,8 @@ import { BankPicker } from '../common/BankPicker';
 import { BottomSheetModal } from '../common/BottomSheetModal';
 import { useToast } from '../common/Toast';
 import { isNetworkOnline } from '../../services/networkService';
+import { RoomQrModal } from './RoomQrModal';
+import { QrScannerModal } from './QrScannerModal';
 
 type CloudTab = 'room' | 'create' | 'join' | 'settings';
 type BankAction = 'create' | 'join';
@@ -93,6 +95,8 @@ const CloudSyncContent: React.FC<{
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [isQrModalOpen, setIsQrModalOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -118,6 +122,7 @@ const CloudSyncContent: React.FC<{
     if (!res.party) return;
     const participants = mapCloudParticipants(res);
     const expenses = mapCloudExpenses(res.expenses);
+    const shoppingList = res.shoppingList ? mapCloudShoppingList(res.shoppingList) : [];
     const settledTransferIds = (res.paymentStatuses || [])
       .filter((status) => status.isPaid)
       .map((status) => status.transferId);
@@ -130,13 +135,21 @@ const CloudSyncContent: React.FC<{
       date: res.party.createdAt || new Date().toISOString(),
       participants,
       expenses,
+      shoppingList,
       settledTransferIds,
       deletedExpenseIds: [],
       pendingExpenseIds: [],
     });
   };
 
-  const startBankStep = (action: BankAction) => {
+  const handleQrScanned = (scannedCode: string) => {
+    const clean = scannedCode.trim().toUpperCase();
+    setJoinCode(clean);
+    showToast(`Код #${clean} распознан! ✨`, { type: 'success' });
+    startBankStep('join', clean);
+  };
+
+  const startBankStep = (action: BankAction, overrideCode?: string) => {
     setError('');
     if (!auth) {
       setError('Требуется авторизация');
@@ -152,11 +165,12 @@ const CloudSyncContent: React.FC<{
       return;
     }
 
+    const codeToJoin = overrideCode || joinCode;
     if (action === 'create' && createTitle.trim().length < 2) {
       setError('Введите название комнаты');
       return;
     }
-    if (action === 'join' && joinCode.replace(/\s/g, '').length < 4) {
+    if (action === 'join' && codeToJoin.replace(/\s/g, '').length < 3) {
       setError('Введите код комнаты');
       return;
     }
@@ -413,25 +427,36 @@ const CloudSyncContent: React.FC<{
         <View style={styles.codeCard}>
           <Text style={styles.codeLabel}>КОД КОМНАТЫ</Text>
           <Text style={styles.codeValue}>{currentParty.code}</Text>
-          <TouchableOpacity
-            style={[styles.copyCodeButton, copiedCode && styles.copyCodeButtonDone]}
-            onPress={handleCopyCode}
-            accessibilityRole="button"
-          >
-            <Ionicons
-              name={copiedCode ? 'checkmark-circle' : 'copy-outline'}
-              size={17}
-              color={copiedCode ? theme.colors.success : theme.colors.primary}
-            />
-            <Text
-              style={[
-                styles.copyCodeText,
-                copiedCode && { color: theme.colors.success },
-              ]}
+          <View style={styles.codeButtonsRow}>
+            <TouchableOpacity
+              style={[styles.copyCodeButton, copiedCode && styles.copyCodeButtonDone]}
+              onPress={handleCopyCode}
+              accessibilityRole="button"
             >
-              {copiedCode ? 'Скопировано!' : 'Скопировать код'}
-            </Text>
-          </TouchableOpacity>
+              <Ionicons
+                name={copiedCode ? 'checkmark-circle' : 'copy-outline'}
+                size={16}
+                color={copiedCode ? theme.colors.success : theme.colors.primary}
+              />
+              <Text
+                style={[
+                  styles.copyCodeText,
+                  copiedCode && { color: theme.colors.success },
+                ]}
+              >
+                {copiedCode ? 'Скопировано!' : 'Скопировать'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.qrCodeButton}
+              onPress={() => setIsQrModalOpen(true)}
+              accessibilityRole="button"
+            >
+              <Ionicons name="qr-code-outline" size={16} color={theme.colors.neonCyan} />
+              <Text style={styles.qrCodeButtonText}>QR-код</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         <View style={styles.roomInfoCard}>
@@ -531,25 +556,38 @@ const CloudSyncContent: React.FC<{
     <View style={styles.form}>
       <Text style={styles.formTitle}>Войти по коду</Text>
       <Text style={styles.formHint}>
-        Попросите организатора прислать код комнаты. После входа вы подтвердите банк для
-        этого сбора — по умолчанию подставится банк из профиля.
+        Попросите организатора прислать код комнаты или отсканируйте его QR-код камерой.
       </Text>
 
-      <Input
-        label="Код комнаты"
-        placeholder="Например: PUB777"
-        leftIcon="key-outline"
-        value={joinCode}
-        onChangeText={(value) => setJoinCode(value.toUpperCase())}
-        autoCapitalize="characters"
-        autoCorrect={false}
-        maxLength={10}
-      />
+      <View style={styles.joinCodeRow}>
+        <View style={styles.joinInputFlex}>
+          <Input
+            label="Код комнаты"
+            placeholder="Например: PUB777"
+            leftIcon="key-outline"
+            value={joinCode}
+            onChangeText={(value) => setJoinCode(value.toUpperCase())}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            maxLength={36}
+          />
+        </View>
+        <TouchableOpacity
+          style={styles.scanButton}
+          onPress={() => setIsScannerOpen(true)}
+          activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel="Сканировать QR-код"
+        >
+          <Ionicons name="camera-outline" size={20} color={theme.colors.neonCyan} />
+          <Text style={styles.scanButtonText}>Сканер QR</Text>
+        </TouchableOpacity>
+      </View>
 
       {renderErrorBox(() => startBankStep('join'))}
 
       <Button
-        title="Продолжить"
+        title="Войти в комнату"
         icon="arrow-forward-outline"
         iconPosition="right"
         onPress={() => startBankStep('join')}
@@ -715,6 +753,19 @@ const CloudSyncContent: React.FC<{
           <Text style={styles.busyText}>Связываемся с Google Sheets...</Text>
         </View>
       ) : null}
+
+      <QrScannerModal
+        visible={isScannerOpen}
+        onClose={() => setIsScannerOpen(false)}
+        onScan={handleQrScanned}
+      />
+      <RoomQrModal
+        visible={isQrModalOpen}
+        onClose={() => setIsQrModalOpen(false)}
+        partyCode={currentParty.code || ''}
+        partyTitle={currentParty.title}
+        partyId={currentParty.id}
+      />
     </KeyboardAvoidingView>
   );
 };
@@ -1000,12 +1051,17 @@ function createStyles(theme: ThemeTokens) {
       letterSpacing: 4,
       marginVertical: theme.spacing.sm,
     },
+    codeButtonsRow: {
+      flexDirection: 'row',
+      gap: 10,
+      marginTop: 4,
+    },
     copyCodeButton: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 6,
-      paddingHorizontal: 12,
-      paddingVertical: 7,
+      paddingHorizontal: 14,
+      paddingVertical: 8,
       borderRadius: theme.borderRadius.full,
       backgroundColor: `${theme.colors.primary}12`,
       borderWidth: 1,
@@ -1018,6 +1074,48 @@ function createStyles(theme: ThemeTokens) {
     copyCodeText: {
       color: theme.colors.primary,
       fontSize: 12,
+      fontWeight: '700',
+    },
+    qrCodeButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      borderRadius: theme.borderRadius.full,
+      backgroundColor: `${theme.colors.neonCyan}12`,
+      borderWidth: 1,
+      borderColor: `${theme.colors.neonCyan}44`,
+    },
+    qrCodeButtonText: {
+      color: theme.colors.neonCyan,
+      fontSize: 12,
+      fontWeight: '700',
+    },
+    joinCodeRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-end',
+      gap: 10,
+    },
+    joinInputFlex: {
+      flex: 1,
+    },
+    scanButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      height: 50,
+      paddingHorizontal: 14,
+      backgroundColor: `${theme.colors.neonCyan}16`,
+      borderWidth: 1,
+      borderColor: `${theme.colors.neonCyan}45`,
+      borderRadius: theme.borderRadius.md,
+      marginBottom: 0,
+    },
+    scanButtonText: {
+      color: theme.colors.neonCyan,
+      fontSize: 13,
       fontWeight: '700',
     },
     roomInfoCard: {

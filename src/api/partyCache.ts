@@ -12,7 +12,7 @@ import type { PartyApiResponse } from './googleSheets';
  * the background revalidation a last-known-good snapshot.
  */
 const STORAGE_KEY = '@partysplit:cloud_party_cache_v1';
-const FRESH_TTL_MS = 4000;
+const FRESH_TTL_MS = 2500;
 const STALE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days offline fallback
 const MAX_ENTRIES = 8;
 // Room data is polled every ~8 seconds. Persisting every poll would cause

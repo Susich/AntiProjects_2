@@ -37,14 +37,23 @@ export function mapCloudExpenses(expenses?: CloudExpense[]): ExpenseItem[] {
 export function mapCloudShoppingList(items?: CloudShoppingItem[]): ShoppingItem[] {
   return (items || []).map((item) => {
     const category = String(item.category || '') as ItemCategory;
+    const rawBought = item.isBought as unknown;
+    const isBought =
+      rawBought === true ||
+      String(rawBought).trim().toLowerCase() === 'true' ||
+      String(rawBought).trim() === '1';
+
+    const estNum = Number(item.estimatedAmount);
+    const actNum = Number(item.actualAmount);
+
     return {
       id: String(item.id),
       title: String(item.title || 'Покупка'),
-      estimatedAmount: Number(item.estimatedAmount) || undefined,
+      estimatedAmount: !isNaN(estNum) && estNum > 0 ? estNum : undefined,
       assignedUserId: item.assignedUserId ? String(item.assignedUserId) : undefined,
-      isBought: Boolean(item.isBought),
+      isBought,
       boughtById: item.boughtById ? String(item.boughtById) : undefined,
-      actualAmount: Number(item.actualAmount) || undefined,
+      actualAmount: !isNaN(actNum) && actNum > 0 ? actNum : undefined,
       convertedExpenseId: item.convertedExpenseId ? String(item.convertedExpenseId) : undefined,
       category: VALID_CATEGORIES.includes(category) ? category : undefined,
       createdAt: item.createdAt ? String(item.createdAt) : undefined,

@@ -17,7 +17,7 @@ import { isNetworkOnline } from '../services/networkService';
  *  - pauses in the background and refreshes immediately on foreground;
  *  - uses the API read cache / in-flight deduplication.
  */
-const DEFAULT_INTERVAL_MS = 8000;
+const DEFAULT_INTERVAL_MS = 4000;
 const MAX_INTERVAL_MS = 60000;
 
 export function useCloudAutoSync(intervalMs: number = DEFAULT_INTERVAL_MS): void {
