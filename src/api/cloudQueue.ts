@@ -575,6 +575,28 @@ export function isOperationPendingForExpense(
   );
 }
 
+/**
+ * Checks if a shopping item operation is in the offline queue.
+ */
+export function isOperationPendingForShoppingItem(
+  partyId: string,
+  itemId: string
+): boolean {
+  const all = [...delayed, ...ready, ...inFlight];
+  return all.some(
+    (item) =>
+      item.partyId === partyId &&
+      (item.coalesceKey === `shopping:update:${partyId}:${itemId}` ||
+        item.coalesceKey === `shopping:add:${partyId}:${itemId}` ||
+        item.coalesceKey === `shopping:delete:${partyId}:${itemId}` ||
+        (item.action === 'addShoppingItem' && (item.data?.id === itemId || item.data?.itemId === itemId)) ||
+        (item.action === 'updateShoppingItem' && (item.data?.id === itemId || item.data?.itemId === itemId)) ||
+        (item.action === 'deleteShoppingItem' && (item.data?.id === itemId || item.data?.itemId === itemId)) ||
+        item.data?.id === itemId ||
+        item.data?.itemId === itemId)
+  );
+}
+
 /** True while any debounce, retry, queued or in-flight write exists. */
 export function hasPendingCloudWrites(): boolean {
   return delayed.length > 0 || ready.length > 0 || inFlight.length > 0;

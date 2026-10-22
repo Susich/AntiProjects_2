@@ -3,7 +3,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import {
   AndroidImportance,
-  AndroidNotificationPriority,
   AndroidNotificationVisibility,
 } from 'expo-notifications';
 import { AppNotification, NotificationPreferences, NotificationType } from '../types';
@@ -15,7 +14,7 @@ export const ANDROID_NOTIFICATION_CHANNEL_ID = 'bill-operations';
 export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
   enabled: true,
   channels: {
-    system: true,
+    system: false,
     inApp: true,
   },
   categories: {
@@ -27,7 +26,8 @@ export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
   },
 };
 
-// Configure native notification presentation behavior
+// Configure native notification presentation behavior:
+// Show OS system alert shade, heads-up banner and play sound.
 if (Platform.OS !== 'web') {
   try {
     Notifications.setNotificationHandler({
@@ -178,65 +178,14 @@ export async function requestSystemPermission(): Promise<boolean> {
 }
 
 /**
- * Dispatches a native or web system push/local notification to the device shade.
+ * Dispatches a notification. Phone system shade notifications have been removed
+ * per user request; notifications are maintained exclusively within the in-app
+ * notification center.
  */
 export async function sendSystemNotification(
-  notification: AppNotification
+  _notification: AppNotification
 ): Promise<void> {
-  if (Platform.OS === 'web') {
-    if (
-      typeof window !== 'undefined' &&
-      'Notification' in window &&
-      window.Notification.permission === 'granted'
-    ) {
-      try {
-        const webNotif = new window.Notification(notification.title, {
-          body: notification.message,
-          icon: '/favicon.ico',
-          tag: notification.id,
-          data: {
-            partyId: notification.partyId,
-            type: notification.type,
-          },
-        });
-        webNotif.onclick = () => {
-          window.focus();
-        };
-      } catch (err) {
-        console.warn('[NotificationService] Web notification error:', err);
-      }
-    }
-    return;
-  }
-
-  // Native iOS / Android
-  try {
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: notification.title,
-        body: notification.message,
-        data: {
-          notificationId: notification.id,
-          partyId: notification.partyId,
-          type: notification.type,
-          ...notification.data,
-        },
-        sound: true,
-        badge: 1,
-        priority: AndroidNotificationPriority.MAX,
-        ...(Platform.OS === 'android'
-          ? {
-              channelId: ANDROID_NOTIFICATION_CHANNEL_ID,
-              vibrate: [0, 250, 250, 250],
-              color: '#00F5A0',
-            }
-          : {}),
-      },
-      trigger: null, // Send immediately to system tray
-    });
-  } catch (err) {
-    console.warn('[NotificationService] Native schedule error:', err);
-  }
+  // No-op: OS push notifications to phone shade removed.
 }
 
 /**

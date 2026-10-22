@@ -32,6 +32,7 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
   const currentParty = usePartyStore((s) => s.currentParty);
+  const session = usePartyStore((s) => s.session);
   const toggleTransferSettled = usePartyStore((s) => s.toggleTransferSettled);
   const saveCurrentPartyToHistory = usePartyStore((s) => s.saveCurrentPartyToHistory);
   const { showToast } = useToast();
@@ -39,8 +40,14 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all');
   const [showBalancesDetails, setShowBalancesDetails] = useState(false);
 
-  // Participants are authenticated users in the room, not a local address book.
-  const partyProfiles = currentParty.participants || [];
+  // Participants are authenticated users in the room, merged with current session
+  const partyProfiles = useMemo(() => {
+    return (currentParty.participants || []).map((p) =>
+      p.id === session?.user.id && session?.user.avatarUrl
+        ? { ...p, avatarUrl: session.user.avatarUrl }
+        : p
+    );
+  }, [currentParty.participants, session]);
 
   // Greedy debt simplification calculator
   const calculation = usePartyCalculator({
@@ -79,6 +86,7 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
         label: 'В расчёте',
         color: theme.colors.success,
         icon: 'checkmark-circle-outline' as const,
+        isPaid: true,
       };
     }
     if (pendingOutgoing.length > 0) {
@@ -87,14 +95,16 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
         label: `Ожидает оплаты ${formatRubles(pendingOutgoingAmount)}`,
         color: theme.colors.warning,
         icon: 'time-outline' as const,
+        isPaid: false,
       };
     }
     if (outgoing.length > 0) {
       return {
         participant,
-        label: 'Оплатил свою часть',
+        label: 'Оплачено',
         color: theme.colors.success,
-        icon: 'checkmark-done-outline' as const,
+        icon: 'checkmark-done-circle' as const,
+        isPaid: true,
       };
     }
     if (pendingIncoming.length > 0) {
@@ -103,13 +113,15 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
         label: `Ждёт перевода ${formatRubles(pendingIncomingAmount)}`,
         color: theme.colors.info,
         icon: 'hourglass-outline' as const,
+        isPaid: false,
       };
     }
     return {
       participant,
-      label: 'Получил перевод',
+      label: 'Оплачено',
       color: theme.colors.success,
       icon: 'cash-outline' as const,
+      isPaid: true,
     };
   });
 
@@ -262,7 +274,14 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
                   {status.label}
                 </Text>
               </View>
-              <Ionicons name={status.icon} size={19} color={status.color} />
+              {status.isPaid ? (
+                <View style={styles.paidBadge}>
+                  <Ionicons name="checkmark-circle" size={13} color={theme.colors.success} />
+                  <Text style={styles.paidBadgeText}>Оплачено</Text>
+                </View>
+              ) : (
+                <Ionicons name={status.icon} size={19} color={status.color} />
+              )}
             </View>
           ))}
         </View>
@@ -522,6 +541,22 @@ function createStyles(theme: ThemeTokens) {
       fontSize: 10,
       fontWeight: '600',
       marginTop: 1,
+    },
+    paidBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      backgroundColor: `${theme.colors.success}18`,
+      borderWidth: 1,
+      borderColor: `${theme.colors.success}50`,
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: theme.borderRadius.full,
+    },
+    paidBadgeText: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: theme.colors.success,
     },
     filterRow: {
       flexDirection: 'row',

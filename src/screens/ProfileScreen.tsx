@@ -17,19 +17,15 @@ import { Card } from '../components/common/Card';
 import { ProfileEditModal } from '../components/profile/ProfileEditModal';
 import { ThemeSelectorModal } from '../components/common/ThemeSelectorModal';
 import { CloudSyncModal } from '../components/party/CloudSyncModal';
-import { NotificationSettingsModal } from '../components/notifications/NotificationSettingsModal';
 import { AnimatedNumber } from '../components/common/AnimatedNumber';
 import { ShareAppModal } from '../components/common/ShareAppModal';
 import { UpdateModal } from '../components/update/UpdateModal';
 import { useToast } from '../components/common/Toast';
-import { useNotificationStore } from '../store/useNotificationStore';
-import { openSystemNotificationSettings } from '../services/notificationService';
 import { Avatar } from '../components/common/Avatar';
 import { BottomSheetModal } from '../components/common/BottomSheetModal';
 import {
   pickAvatarFromGallery,
   takeAvatarWithCamera,
-  saveAvatarLocally,
 } from '../services/avatarService';
 import {
   checkForAppUpdate,
@@ -57,14 +53,12 @@ export const ProfileScreen: React.FC = () => {
   const history = usePartyStore((s) => s.history);
   const logout = usePartyStore((s) => s.logout);
   const updateAvatar = usePartyStore((s) => s.updateAvatar);
-  const permissionStatus = useNotificationStore((s) => s.permissionStatus);
   const { showToast } = useToast();
 
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [isAvatarModalOpen, setIsAvatarModalOpen] = useState(false);
   const [isThemeOpen, setIsThemeOpen] = useState(false);
   const [isCloudOpen, setIsCloudOpen] = useState(false);
-  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [isShareOpen, setIsShareOpen] = useState(false);
 
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
@@ -82,7 +76,14 @@ export const ProfileScreen: React.FC = () => {
       const res = await checkForAppUpdate();
       setAppVersion(res.currentVersion);
       setUpdateInfo(res);
-      setIsUpdateModalOpen(true);
+      if (res.hasUpdate) {
+        setIsUpdateModalOpen(true);
+      } else {
+        showToast(`У вас установлена последняя версия (v${res.currentVersion})`, {
+          type: 'success',
+          icon: 'checkmark-circle',
+        });
+      }
     } catch {
       showToast('Не удалось проверить наличие обновлений', { type: 'error' });
     } finally {
@@ -93,10 +94,9 @@ export const ProfileScreen: React.FC = () => {
   const handlePickFromGallery = async () => {
     setIsAvatarModalOpen(false);
     if (!session) return;
-    const res = await pickAvatarFromGallery();
+    const res = await pickAvatarFromGallery(session.user.id);
     if (res) {
-      const permanentUri = await saveAvatarLocally(res.uri, session.user.id);
-      void updateAvatar(permanentUri);
+      void updateAvatar(res.dataUrl);
       showToast('Аватарка обновлена', { type: 'success' });
     }
   };
@@ -104,10 +104,9 @@ export const ProfileScreen: React.FC = () => {
   const handleTakeWithCamera = async () => {
     setIsAvatarModalOpen(false);
     if (!session) return;
-    const res = await takeAvatarWithCamera();
+    const res = await takeAvatarWithCamera(session.user.id);
     if (res) {
-      const permanentUri = await saveAvatarLocally(res.uri, session.user.id);
-      void updateAvatar(permanentUri);
+      void updateAvatar(res.dataUrl);
       showToast('Аватарка обновлена', { type: 'success' });
     }
   };
@@ -221,29 +220,6 @@ export const ProfileScreen: React.FC = () => {
           </TouchableOpacity>
         </View>
 
-        {/* Soft Informational Banner if Notifications are Denied */}
-        {permissionStatus === 'denied' && (
-          <View style={styles.permissionBanner}>
-            <View style={styles.permissionBannerIcon}>
-              <Ionicons name="notifications-off-outline" size={20} color={theme.colors.warning} />
-            </View>
-            <View style={styles.permissionBannerContent}>
-              <Text style={styles.permissionBannerTitle}>Системные уведомления отключены</Text>
-              <Text style={styles.permissionBannerText}>
-                Включите уведомления в настройках телефона, чтобы вовремя получать оповещения о счетах, оплатах и закрытии тусовок.
-              </Text>
-              <TouchableOpacity
-                style={styles.permissionBannerButton}
-                onPress={() => void openSystemNotificationSettings()}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.permissionBannerButtonText}>В настройки устройства</Text>
-                <Ionicons name="chevron-forward" size={13} color={theme.colors.primary} />
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
-
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Статистика за всё время</Text>
         </View>
@@ -339,12 +315,6 @@ export const ProfileScreen: React.FC = () => {
             onPress: () => setIsThemeOpen(true),
           })}
           {settingsRow({
-            icon: 'notifications-outline',
-            title: 'Уведомления',
-            subtitle: 'Push-оповещения, каналы и типы событий',
-            onPress: () => setIsNotificationsOpen(true),
-          })}
-          {settingsRow({
             icon: 'cloud-outline',
             title: 'Комната и Google Sheets',
             subtitle: currentParty.code
@@ -388,10 +358,6 @@ export const ProfileScreen: React.FC = () => {
       <ProfileEditModal visible={isEditOpen} onClose={() => setIsEditOpen(false)} />
       <ThemeSelectorModal visible={isThemeOpen} onClose={() => setIsThemeOpen(false)} />
       <CloudSyncModal visible={isCloudOpen} onClose={() => setIsCloudOpen(false)} />
-      <NotificationSettingsModal
-        visible={isNotificationsOpen}
-        onClose={() => setIsNotificationsOpen(false)}
-      />
       <ShareAppModal
         visible={isShareOpen}
         onClose={() => setIsShareOpen(false)}
@@ -816,51 +782,6 @@ function createStyles(theme: ThemeTokens) {
       color: theme.colors.textMuted,
       fontSize: 11,
       lineHeight: 16,
-    },
-    permissionBanner: {
-      flexDirection: 'row',
-      backgroundColor: `${theme.colors.warning}14`,
-      borderColor: `${theme.colors.warning}35`,
-      borderWidth: 1,
-      borderRadius: 14,
-      padding: theme.spacing.md,
-      gap: theme.spacing.md,
-      alignItems: 'flex-start',
-    },
-    permissionBannerIcon: {
-      width: 36,
-      height: 36,
-      borderRadius: 18,
-      backgroundColor: `${theme.colors.warning}22`,
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginTop: 2,
-    },
-    permissionBannerContent: {
-      flex: 1,
-      gap: 4,
-    },
-    permissionBannerTitle: {
-      fontSize: 14,
-      fontWeight: '700',
-      color: theme.colors.textPrimary,
-    },
-    permissionBannerText: {
-      fontSize: 12,
-      lineHeight: 17,
-      color: theme.colors.textSecondary,
-    },
-    permissionBannerButton: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 4,
-      marginTop: 6,
-      alignSelf: 'flex-start',
-    },
-    permissionBannerButtonText: {
-      fontSize: 12,
-      fontWeight: '700',
-      color: theme.colors.primary,
     },
   });
 }

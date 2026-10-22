@@ -25,7 +25,6 @@ import { Avatar } from '../common/Avatar';
 import {
   pickAvatarFromGallery,
   takeAvatarWithCamera,
-  saveAvatarLocally,
 } from '../../services/avatarService';
 
 interface ProfileEditModalProps {
@@ -85,10 +84,9 @@ const ProfileEditForm: React.FC<{
     if (!session || pickingAvatar) return;
     setPickingAvatar(true);
     try {
-      const res = await pickAvatarFromGallery();
+      const res = await pickAvatarFromGallery(session.user.id);
       if (res) {
-        const permanentUri = await saveAvatarLocally(res.uri, session.user.id);
-        setAvatarUrl(permanentUri);
+        setAvatarUrl(res.dataUrl);
         showToast('Фото выбрано', { type: 'info' });
       }
     } finally {
@@ -100,10 +98,9 @@ const ProfileEditForm: React.FC<{
     if (!session || pickingAvatar) return;
     setPickingAvatar(true);
     try {
-      const res = await takeAvatarWithCamera();
+      const res = await takeAvatarWithCamera(session.user.id);
       if (res) {
-        const permanentUri = await saveAvatarLocally(res.uri, session.user.id);
-        setAvatarUrl(permanentUri);
+        setAvatarUrl(res.dataUrl);
         showToast('Фото сделано', { type: 'info' });
       }
     } finally {

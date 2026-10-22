@@ -1,4 +1,4 @@
-import {
+import type {
   DebtCalculationResult,
   ExpenseItem,
   ParticipantBalance,

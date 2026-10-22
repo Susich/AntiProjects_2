@@ -17,7 +17,8 @@ import { usePartyStore } from '../../store/usePartyStore';
 import { Input } from '../common/Input';
 import { Button } from '../common/Button';
 import { BottomSheetModal } from '../common/BottomSheetModal';
-import { formatPhone, formatRubles, getInitials } from '../../utils/currency';
+import { Avatar } from '../common/Avatar';
+import { formatPhone, formatRubles } from '../../utils/currency';
 import { useToast } from '../common/Toast';
 
 interface AddItemModalProps {
@@ -66,11 +67,16 @@ const AddItemForm: React.FC<AddItemFormProps> = ({
   const currentParty = usePartyStore((s) => s.currentParty);
   const addExpense = usePartyStore((s) => s.addExpense);
   const updateExpense = usePartyStore((s) => s.updateExpense);
+  const session = usePartyStore((s) => s.session);
   const { showToast } = useToast();
 
-  // Participants are authenticated users returned by the room; there is no
-  // separate local address book to resolve.
-  const partyProfiles: UserProfile[] = currentParty.participants || [];
+  const partyProfiles: UserProfile[] = useMemo(() => {
+    return (currentParty.participants || []).map((p) =>
+      p.id === session?.user.id && session?.user.avatarUrl
+        ? { ...p, avatarUrl: session.user.avatarUrl }
+        : p
+    );
+  }, [currentParty.participants, session]);
 
   // Mounted only while the modal is open, so these initializers give us a
   // fresh form on every open without a setState-in-effect round trip.
@@ -344,14 +350,13 @@ const AddItemForm: React.FC<AddItemFormProps> = ({
                       activeOpacity={0.8}
                       style={[styles.payerCard, isSelected && styles.payerCardActive]}
                     >
-                      <View
-                        style={[
-                          styles.payerAvatar,
-                          { backgroundColor: p.avatarColor || theme.colors.primary },
-                        ]}
-                      >
-                        <Text style={styles.payerAvatarText}>{getInitials(p.name)}</Text>
-                      </View>
+                      <Avatar
+                        url={p.avatarUrl}
+                        name={p.name}
+                        color={p.avatarColor || theme.colors.primary}
+                        size={28}
+                        style={{ marginRight: 8 }}
+                      />
                       <View style={{ flex: 1 }}>
                         <Text
                           style={[styles.payerName, isSelected && styles.payerNameActive]}
@@ -449,14 +454,13 @@ const AddItemForm: React.FC<AddItemFormProps> = ({
                         isChecked && styles.consumerCheckCardActive,
                       ]}
                     >
-                      <View
-                        style={[
-                          styles.smallAvatar,
-                          { backgroundColor: p.avatarColor || theme.colors.info },
-                        ]}
-                      >
-                        <Text style={styles.smallAvatarText}>{getInitials(p.name)}</Text>
-                      </View>
+                      <Avatar
+                        url={p.avatarUrl}
+                        name={p.name}
+                        color={p.avatarColor || theme.colors.info}
+                        size={24}
+                        style={{ marginRight: 6 }}
+                      />
 
                       <Text
                         style={[

@@ -2,41 +2,42 @@ import { Linking, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Application from 'expo-application';
 import { DEFAULT_GOOGLE_SCRIPT_URL, getGoogleScriptUrl } from '../api/googleSheets';
+import { CURRENT_APP_VERSION } from '../config/version';
+import { compareVersions, isUpdateAvailable, parseSemver } from '../utils/semver';
 
-export const CURRENT_APP_VERSION = '1.0.1';
+export { CURRENT_APP_VERSION, compareVersions, isUpdateAvailable, parseSemver };
 export const DEFAULT_GOOGLE_DRIVE_APK_FILE_ID = '1Xj-OHVMDlsZKlZfOqkJPza-RSejNJH4M';
 export const LAST_UPDATE_CHECK_KEY = '@partysplit:last_update_check';
 export const DISMISSED_UPDATE_VERSION_KEY = '@partysplit:dismissed_update_version';
 export const INSTALLED_APP_VERSION_KEY = '@partysplit:installed_version';
 
 /**
- * Returns current installed app version, taking into account native package metadata
- * or local installation persistence so updates are recognized immediately.
+ * Returns current installed app version from the single source of truth configuration.
  */
 export async function getCurrentAppVersion(): Promise<string> {
-  const candidates: string[] = [CURRENT_APP_VERSION];
+  let highest = CURRENT_APP_VERSION;
+
+  try {
+    const saved = await AsyncStorage.getItem(INSTALLED_APP_VERSION_KEY);
+    if (saved && typeof saved === 'string' && compareVersions(saved, highest) > 0) {
+      highest = saved;
+    }
+  } catch {
+    // Ignore storage errors
+  }
 
   try {
     const nativeVer = Application.nativeApplicationVersion;
-    if (nativeVer) {
-      candidates.push(nativeVer);
+    if (nativeVer && typeof nativeVer === 'string' && /^\d+\.\d+/.test(nativeVer)) {
+      if (compareVersions(nativeVer, highest) > 0) {
+        highest = nativeVer;
+      }
     }
   } catch {
-    // Ignore in unsupported environments
+    // Ignore in unsupported environments (e.g. web or dev client)
   }
 
-  try {
-    const storedVer = await AsyncStorage.getItem(INSTALLED_APP_VERSION_KEY);
-    if (storedVer) {
-      candidates.push(storedVer);
-    }
-  } catch {
-    // Ignore
-  }
-
-  const validCandidates = candidates.filter((v) => Boolean(v && typeof v === 'string'));
-  validCandidates.sort((a, b) => compareVersions(b, a));
-  return validCandidates[0] || CURRENT_APP_VERSION;
+  return highest;
 }
 
 export async function markVersionAsInstalled(version: string): Promise<void> {
@@ -88,6 +89,11 @@ export function formatGoogleDriveDirectUrl(urlOrId: string): string {
     return urlOrId.includes('confirm=t') ? urlOrId : `${urlOrId}&confirm=t`;
   }
 
+  // Already a google drive export download link
+  if (urlOrId.includes('drive.google.com/uc?export=download')) {
+    return urlOrId;
+  }
+
   // Extract ID from various formats
   let fileId = '';
   const idParamMatch = urlOrId.match(/[?&]id=([a-zA-Z0-9_-]+)/);
@@ -109,29 +115,6 @@ export function formatGoogleDriveDirectUrl(urlOrId: string): string {
   }
 
   return urlOrId;
-}
-
-/**
- * Semantic version comparison:
- * returns 1 if v1 > v2
- * returns -1 if v1 < v2
- * returns 0 if v1 === v2
- */
-export function compareVersions(v1: string, v2: string): number {
-  const cleanV1 = (v1 || '').replace(/^v/i, '').trim();
-  const cleanV2 = (v2 || '').replace(/^v/i, '').trim();
-
-  const p1 = cleanV1.split('.').map((num) => parseInt(num, 10) || 0);
-  const p2 = cleanV2.split('.').map((num) => parseInt(num, 10) || 0);
-  const length = Math.max(p1.length, p2.length);
-
-  for (let i = 0; i < length; i++) {
-    const a = p1[i] ?? 0;
-    const b = p2[i] ?? 0;
-    if (a > b) return 1;
-    if (a < b) return -1;
-  }
-  return 0;
 }
 
 /**
@@ -165,13 +148,13 @@ export async function checkForAppUpdate(): Promise<UpdateCheckResult> {
           googleDriveFileId: data.googleDriveFileId || DEFAULT_GOOGLE_DRIVE_APK_FILE_ID,
           releaseNotes:
             data.releaseNotes ||
-            '• Улучшена стабильность системных уведомлений в Android 13+\n• Оптимизация интерфейса и исправление нижнего бара\n• Быстрая синхронизация расходов',
+            'Исправление синхронизации и багов верстки',
           minSupportedVersion: data.minSupportedVersion || '1.0.0',
           fileSizeMb: data.fileSizeMb || 42,
           publishedAt: data.publishedAt,
         };
 
-        const hasUpdate = compareVersions(config.latestVersion, currentVersion) > 0;
+        const hasUpdate = isUpdateAvailable(config.latestVersion, currentVersion);
         await AsyncStorage.setItem(LAST_UPDATE_CHECK_KEY, Date.now().toString());
 
         return {
@@ -191,15 +174,14 @@ export async function checkForAppUpdate(): Promise<UpdateCheckResult> {
 
   // Safe fallback default config
   const fallbackConfig: VersionConfig = {
-    latestVersion: '1.0.1',
+    latestVersion: '1.0.5',
     apkUrl: formatGoogleDriveDirectUrl(DEFAULT_GOOGLE_DRIVE_APK_FILE_ID),
     googleDriveFileId: DEFAULT_GOOGLE_DRIVE_APK_FILE_ID,
-    releaseNotes:
-      '• Обновленная система системных уведомлений Android 13+\n• Исправление геометрии и подложки навигационного бара\n• Автоматическая проверка и загрузка обновлений через Google Диск',
+    releaseNotes: 'Исправление синхронизации и багов верстки',
     fileSizeMb: 42,
   };
 
-  const hasUpdate = compareVersions(fallbackConfig.latestVersion, currentVersion) > 0;
+  const hasUpdate = isUpdateAvailable(fallbackConfig.latestVersion, currentVersion);
 
   return {
     hasUpdate,

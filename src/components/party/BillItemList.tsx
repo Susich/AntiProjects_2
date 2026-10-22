@@ -13,11 +13,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { ThemeTokens, useTheme } from '../../context/ThemeContext';
 import { ExpenseItem, UserProfile } from '../../types';
 import { usePartyStore } from '../../store/usePartyStore';
-import { formatRubles, getInitials } from '../../utils/currency';
+import { formatRubles } from '../../utils/currency';
 import { useToast } from '../common/Toast';
 import { FadeSlideIn } from '../common/FadeSlideIn';
 import { PressableScale } from '../common/PressableScale';
 import { isOperationPendingForExpense } from '../../api/cloudQueue';
+import { Avatar } from '../common/Avatar';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -43,11 +44,20 @@ export const BillItemList: React.FC<BillItemListProps> = ({
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
   const currentParty = usePartyStore((s) => s.currentParty);
+  const session = usePartyStore((s) => s.session);
   const removeExpense = usePartyStore((s) => s.removeExpense);
   const { showToast } = useToast();
 
-  const getProfile = (id: string): UserProfile | undefined =>
-    (currentParty.participants || []).find((p) => p.id === id);
+  const getProfile = (id: string): UserProfile | undefined => {
+    const found = (currentParty.participants || []).find((p) => p.id === id);
+    if (found && session?.user && found.id === session.user.id) {
+      return {
+        ...found,
+        avatarUrl: session.user.avatarUrl || found.avatarUrl,
+      };
+    }
+    return found;
+  };
 
   const handleDeletePrompt = (item: ExpenseItem) => {
     Alert.alert(
@@ -151,18 +161,12 @@ export const BillItemList: React.FC<BillItemListProps> = ({
                     <Text style={styles.payerLabel}>Оплатил(а): </Text>
                     {payer ? (
                       <View style={styles.payerInlineChip}>
-                        <View
-                          style={[
-                            styles.payerMiniAvatar,
-                            {
-                              backgroundColor: payer.avatarColor || theme.colors.primary,
-                            },
-                          ]}
-                        >
-                          <Text style={styles.payerMiniAvatarText}>
-                            {getInitials(payer.name)}
-                          </Text>
-                        </View>
+                        <Avatar
+                          url={payer.avatarUrl}
+                          name={payer.name}
+                          color={payer.avatarColor}
+                          size={18}
+                        />
                         <Text style={styles.payerNameText}>{payer.name}</Text>
                       </View>
                     ) : (
@@ -202,18 +206,17 @@ export const BillItemList: React.FC<BillItemListProps> = ({
               <View style={styles.itemFooterRow}>
                 <View style={styles.avatarsRow}>
                   {sharedProfiles.slice(0, 5).map((p, idx) => (
-                    <View
+                    <Avatar
                       key={p.id}
+                      url={p.avatarUrl}
+                      name={p.name}
+                      color={p.avatarColor}
+                      size={22}
                       style={[
                         styles.avatarBubble,
-                        {
-                          backgroundColor: p.avatarColor || theme.colors.info,
-                          marginLeft: idx > 0 ? -6 : 0,
-                        },
+                        { marginLeft: idx > 0 ? -6 : 0 },
                       ]}
-                    >
-                      <Text style={styles.avatarInitials}>{getInitials(p.name)}</Text>
-                    </View>
+                    />
                   ))}
                   {sharedProfiles.length > 5 && (
                     <View style={[styles.avatarBubble, styles.avatarMore, { marginLeft: -6 }]}>

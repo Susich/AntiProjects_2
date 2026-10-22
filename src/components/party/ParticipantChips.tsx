@@ -4,8 +4,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { usePartyStore } from '../../store/usePartyStore';
 import { ThemeTokens, useTheme } from '../../context/ThemeContext';
 import { formatPhone } from '../../utils/currency';
+import { calculateBalances } from '../../utils/debtSimplification';
 import { FadeSlideIn } from '../common/FadeSlideIn';
 import { Avatar } from '../common/Avatar';
+import { SimplifiedDebtTransfer } from '../../types';
 
 interface ParticipantChipsProps {
   onOpenCloud?: () => void;
@@ -17,8 +19,27 @@ export const ParticipantChips: React.FC<ParticipantChipsProps> = ({ onOpenCloud 
   const currentParty = usePartyStore((s) => s.currentParty);
   const session = usePartyStore((s) => s.session);
 
-  const participants = currentParty.participants || [];
+  const participants = useMemo(
+    () => currentParty.participants || [],
+    [currentParty.participants]
+  );
   const isSelf = (id: string) => session?.user.id === id;
+
+  const calculation = useMemo(
+    () =>
+      calculateBalances(
+        currentParty.expenses || [],
+        participants,
+        currentParty.settledTransferIds || []
+      ),
+    [participants, currentParty.expenses, currentParty.settledTransferIds]
+  );
+
+  const isParticipantPaid = (id: string) => {
+    const outgoing = calculation.transfers.filter((t: SimplifiedDebtTransfer) => t.fromUser.id === id);
+    if (outgoing.length === 0) return false;
+    return outgoing.every((t: SimplifiedDebtTransfer) => t.isSettled);
+  };
 
   return (
     <View style={styles.container}>
@@ -45,7 +66,7 @@ export const ParticipantChips: React.FC<ParticipantChipsProps> = ({ onOpenCloud 
             <FadeSlideIn key={participant.id} index={index} style={styles.slideItem}>
               <View style={styles.chip}>
                 <Avatar
-                  url={participant.avatarUrl}
+                  url={isSelf(participant.id) ? (session?.user.avatarUrl || participant.avatarUrl) : participant.avatarUrl}
                   name={participant.name}
                   color={participant.avatarColor}
                   size={38}
@@ -57,6 +78,12 @@ export const ParticipantChips: React.FC<ParticipantChipsProps> = ({ onOpenCloud 
                     </Text>
                     {isSelf(participant.id) ? (
                       <Text style={styles.selfBadge}>вы</Text>
+                    ) : null}
+                    {isParticipantPaid(participant.id) ? (
+                      <View style={styles.paidChipBadge}>
+                        <Ionicons name="checkmark-circle" size={10} color={theme.colors.success} />
+                        <Text style={styles.paidChipBadgeText}>Оплачено</Text>
+                      </View>
                     ) : null}
                   </View>
                   <Text style={styles.meta} numberOfLines={1}>
@@ -198,6 +225,22 @@ function createStyles(theme: ThemeTokens) {
       color: theme.colors.textMuted,
       fontSize: 11,
       marginTop: 2,
+    },
+    paidChipBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 3,
+      backgroundColor: `${theme.colors.success}18`,
+      borderWidth: 1,
+      borderColor: `${theme.colors.success}40`,
+      paddingHorizontal: 5,
+      paddingVertical: 1,
+      borderRadius: 6,
+    },
+    paidChipBadgeText: {
+      color: theme.colors.success,
+      fontSize: 9,
+      fontWeight: '700',
     },
     emptyCard: {
       flexDirection: 'row',

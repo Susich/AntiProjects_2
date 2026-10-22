@@ -16,8 +16,8 @@ import {
   formatPhone,
   formatRubles,
   getAvatarColor,
-  getInitials,
 } from '../../utils/currency';
+import { Avatar } from '../common/Avatar';
 import { calculateBalances } from '../../utils/debtSimplification';
 import { copyToClipboard } from '../../utils/clipboard';
 import { sharePartySettlement } from '../../utils/shareText';
@@ -345,20 +345,16 @@ const SummaryTabContent: React.FC<SummaryTabContentProps> = ({
               <View style={styles.transferTopRow}>
                 {/* Users from -> to */}
                 <View style={styles.transferParticipants}>
-                  <View
-                    style={[
-                      styles.avatarSmall,
-                      {
-                        backgroundColor:
-                          transfer.fromUser.avatarColor ||
-                          getAvatarColor(transfer.fromUser.name),
-                      },
-                    ]}
-                  >
-                    <Text style={styles.avatarSmallText}>
-                      {getInitials(transfer.fromUser.name)}
-                    </Text>
-                  </View>
+                  <Avatar
+                    url={transfer.fromUser.avatarUrl}
+                    name={transfer.fromUser.name}
+                    color={
+                      transfer.fromUser.avatarColor ||
+                      getAvatarColor(transfer.fromUser.name)
+                    }
+                    size={22}
+                    style={{ marginRight: 6 }}
+                  />
                   <Text style={styles.transferUserName} numberOfLines={1}>
                     {transfer.fromUser.name}
                   </Text>
@@ -370,20 +366,16 @@ const SummaryTabContent: React.FC<SummaryTabContentProps> = ({
                     style={{ marginHorizontal: 4 }}
                   />
 
-                  <View
-                    style={[
-                      styles.avatarSmall,
-                      {
-                        backgroundColor:
-                          transfer.toUser.avatarColor ||
-                          getAvatarColor(transfer.toUser.name),
-                      },
-                    ]}
-                  >
-                    <Text style={styles.avatarSmallText}>
-                      {getInitials(transfer.toUser.name)}
-                    </Text>
-                  </View>
+                  <Avatar
+                    url={transfer.toUser.avatarUrl}
+                    name={transfer.toUser.name}
+                    color={
+                      transfer.toUser.avatarColor ||
+                      getAvatarColor(transfer.toUser.name)
+                    }
+                    size={22}
+                    style={{ marginRight: 6 }}
+                  />
                   <Text style={styles.transferUserName} numberOfLines={1}>
                     {transfer.toUser.name}
                   </Text>
@@ -428,7 +420,7 @@ const SummaryTabContent: React.FC<SummaryTabContentProps> = ({
                 {phone ? (
                   <TouchableOpacity
                     style={styles.requisiteCopyBtn}
-                    onPress={() => onCopy(`+${phone}`, 'Номер телефона')}
+                    onPress={() => onCopy(formatPhone(transfer.toUser.phone), 'Номер телефона')}
                     activeOpacity={0.7}
                   >
                     <Ionicons name="call-outline" size={11} color={theme.colors.info} />
@@ -513,17 +505,13 @@ const ItemsTabContent: React.FC<ItemsTabContentProps> = ({
               <View style={styles.itemMetaRow}>
                 <Text style={styles.itemMetaLabel}>Оплатил(а):</Text>
                 <View style={styles.buyerPill}>
-                  <View
-                    style={[
-                      styles.avatarMicro,
-                      {
-                        backgroundColor:
-                          buyer?.avatarColor || getAvatarColor(buyerName),
-                      },
-                    ]}
-                  >
-                    <Text style={styles.avatarMicroText}>{getInitials(buyerName)}</Text>
-                  </View>
+                  <Avatar
+                    url={buyer?.avatarUrl}
+                    name={buyerName}
+                    color={buyer?.avatarColor || getAvatarColor(buyerName)}
+                    size={16}
+                    style={{ marginRight: 4 }}
+                  />
                   <Text style={styles.buyerName} numberOfLines={1}>
                     {buyerName}
                   </Text>
@@ -547,17 +535,13 @@ const ItemsTabContent: React.FC<ItemsTabContentProps> = ({
                   const pName = part?.name || `ID ${split.userId.slice(0, 4)}`;
                   return (
                     <View key={`${split.userId}-${sIdx}`} style={styles.splitParticipantChip}>
-                      <View
-                        style={[
-                          styles.avatarMicro,
-                          {
-                            backgroundColor:
-                              part?.avatarColor || getAvatarColor(pName),
-                          },
-                        ]}
-                      >
-                        <Text style={styles.avatarMicroText}>{getInitials(pName)}</Text>
-                      </View>
+                      <Avatar
+                        url={part?.avatarUrl}
+                        name={pName}
+                        color={part?.avatarColor || getAvatarColor(pName)}
+                        size={16}
+                        style={{ marginRight: 4 }}
+                      />
                       <Text style={styles.splitChipText} numberOfLines={1}>
                         {pName}
                       </Text>
@@ -618,24 +602,47 @@ const MembersTabContent: React.FC<MembersTabContentProps> = ({
           <View key={participant.id} style={styles.memberCard}>
             {/* Top row: Profile & Requisites */}
             <View style={styles.memberHeaderRow}>
-              <View
-                style={[
-                  styles.memberAvatar,
-                  {
-                    backgroundColor:
-                      participant.avatarColor || getAvatarColor(participant.name),
-                  },
-                ]}
-              >
-                <Text style={styles.memberAvatarText}>
-                  {getInitials(participant.name)}
-                </Text>
-              </View>
+              <Avatar
+                url={participant.avatarUrl}
+                name={participant.name}
+                color={
+                  participant.avatarColor || getAvatarColor(participant.name)
+                }
+                size={40}
+              />
 
               <View style={styles.memberInfoCol}>
-                <Text style={styles.memberName} numberOfLines={1}>
-                  {participant.name}
-                </Text>
+                <View style={styles.memberNameAndBadgeRow}>
+                  <Text style={styles.memberName} numberOfLines={1}>
+                    {participant.name}
+                  </Text>
+                  {/* Status / Money Badge placed higher up next to name */}
+                  <View
+                    style={[
+                      styles.balanceBadge,
+                      balanceType === 'positive' && styles.balanceBadgePositive,
+                      balanceType === 'negative' && styles.balanceBadgeNegative,
+                      balanceType === 'neutral' && styles.balanceBadgeNeutral,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.balanceBadgeText,
+                        balanceType === 'positive' && { color: theme.colors.success },
+                        balanceType === 'negative' && { color: theme.colors.danger },
+                        balanceType === 'neutral' && { color: theme.colors.textMuted },
+                      ]}
+                    >
+                      {balanceType === 'positive'
+                        ? `+${formatRubles(netBalance)}`
+                        : balanceType === 'negative'
+                        ? `-${formatRubles(Math.abs(netBalance))}`
+                        : '0 ₽'}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Second row: Bank & Phone number cleanly underneath, no overlap */}
                 <View style={styles.memberMetaRow}>
                   {participant.bank ? (
                     <Text style={styles.memberMetaText}>{participant.bank}</Text>
@@ -645,7 +652,7 @@ const MembersTabContent: React.FC<MembersTabContentProps> = ({
                   ) : null}
                   {phone ? (
                     <TouchableOpacity
-                      onPress={() => onCopy(`+${phone}`, 'Телефон')}
+                      onPress={() => onCopy(formatPhone(participant.phone), 'Телефон')}
                       activeOpacity={0.7}
                       style={styles.inlinePhoneBtn}
                     >
@@ -656,31 +663,6 @@ const MembersTabContent: React.FC<MembersTabContentProps> = ({
                     </TouchableOpacity>
                   ) : null}
                 </View>
-              </View>
-
-              {/* Status Badge */}
-              <View
-                style={[
-                  styles.balanceBadge,
-                  balanceType === 'positive' && styles.balanceBadgePositive,
-                  balanceType === 'negative' && styles.balanceBadgeNegative,
-                  balanceType === 'neutral' && styles.balanceBadgeNeutral,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.balanceBadgeText,
-                    balanceType === 'positive' && { color: theme.colors.success },
-                    balanceType === 'negative' && { color: theme.colors.danger },
-                    balanceType === 'neutral' && { color: theme.colors.textMuted },
-                  ]}
-                >
-                  {balanceType === 'positive'
-                    ? `+${formatRubles(netBalance)}`
-                    : balanceType === 'negative'
-                    ? `-${formatRubles(Math.abs(netBalance))}`
-                    : '0 ₽'}
-                </Text>
               </View>
             </View>
 
@@ -1220,7 +1202,7 @@ function createStyles(theme: ThemeTokens) {
     },
     memberHeaderRow: {
       flexDirection: 'row',
-      alignItems: 'center',
+      alignItems: 'flex-start',
       gap: theme.spacing.sm,
     },
     memberAvatar: {
@@ -1238,10 +1220,18 @@ function createStyles(theme: ThemeTokens) {
     memberInfoCol: {
       flex: 1,
     },
+    memberNameAndBadgeRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: theme.spacing.xs,
+      width: '100%',
+    },
     memberName: {
       color: theme.colors.textPrimary,
       fontSize: 14,
       fontWeight: '700',
+      flex: 1,
     },
     memberMetaRow: {
       flexDirection: 'row',

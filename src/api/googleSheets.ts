@@ -164,6 +164,7 @@ function normalizeUser(raw: unknown): CloudUser | undefined {
     name: asString(item.name) || 'Участник',
     phone: asString(item.phone),
     bank: asString(item.bank) || asString(item.bankName) || 'Сбербанк',
+    avatarUrl: asString(item.avatarUrl) || undefined,
   };
 }
 
@@ -173,6 +174,7 @@ function normalizeParticipant(raw: unknown): CloudParticipant | null {
   const item = raw as Record<string, unknown>;
   return {
     ...user,
+    avatarUrl: user.avatarUrl || asString(item.avatarUrl) || undefined,
     avatarColor: asString(item.avatarColor) || undefined,
     joinedAt: asString(item.joinedAt) || undefined,
   };
@@ -727,7 +729,8 @@ export async function setTransferStatusInCloud(
 ): Promise<PartyApiResponse> {
   return callAppsScriptApi('setTransferStatus', {
     partyId,
-    userId: auth.userId,
+    roomId: partyId,
+    userId: status.fromUserId || auth.userId,
     token: auth.token,
     ...status,
   });
@@ -992,7 +995,7 @@ export function queueSetTransferStatusInCloud(
 ): void {
   const {
     coalesceKey = `party:transfer:${partyId}:${status.transferId}`,
-    debounceMs = 200,
+    debounceMs = 0,
     priority = 15,
     failureMessage = 'Не удалось сохранить статус оплаты',
     ...rest
@@ -1002,7 +1005,8 @@ export function queueSetTransferStatusInCloud(
     'setTransferStatus',
     {
       partyId,
-      userId: auth.userId,
+      roomId: partyId,
+      userId: status.fromUserId || auth.userId,
       token: auth.token,
       ...status,
     },
@@ -1050,7 +1054,7 @@ export function queueAddShoppingItemToCloud(
 ): void {
   const {
     coalesceKey = `shopping:add:${partyId}:${item.id}`,
-    debounceMs = 150,
+    debounceMs = 0,
     priority = 10,
     failureMessage = 'Не удалось сохранить покупку в Google Sheets',
     ...rest
@@ -1060,6 +1064,7 @@ export function queueAddShoppingItemToCloud(
     'addShoppingItem',
     {
       partyId,
+      roomId: partyId,
       userId: auth.userId,
       token: auth.token,
       ...item,
@@ -1097,6 +1102,7 @@ export function queueUpdateShoppingItemToCloud(
     'updateShoppingItem',
     {
       partyId,
+      roomId: partyId,
       itemId: item.id,
       userId: auth.userId,
       token: auth.token,
@@ -1132,7 +1138,9 @@ export function queueDeleteShoppingItemFromCloud(
     'deleteShoppingItem',
     {
       partyId,
+      roomId: partyId,
       itemId,
+      id: itemId,
       userId: auth.userId,
       token: auth.token,
     },

@@ -96,8 +96,11 @@ export function useCloudAutoSync(intervalMs: number = DEFAULT_INTERVAL_MS): void
         nextDelay = intervalMs;
         schedule(0);
       } else {
-        paused = true;
-        clearTimer();
+        // App is in background: continue polling with a gentle 25s interval
+        // so participants outside the app receive phone system notifications.
+        paused = false;
+        nextDelay = Math.max(intervalMs, 25000);
+        schedule(nextDelay);
       }
     });
 

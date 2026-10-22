@@ -2,6 +2,7 @@ import { CloudExpense, CloudShoppingItem, PartyApiResponse } from '../api/google
 import { ExpenseItem, ItemCategory, PartyEvent, ShoppingItem, UserProfile } from '../types';
 import {
   isOperationPendingForExpense,
+  isOperationPendingForShoppingItem,
   isOperationPendingForTransfer,
 } from '../api/cloudQueue';
 
@@ -176,13 +177,24 @@ export function mergeCloudParty(
   // If a transfer has a pending offline mutation in the queue, keep the local settlement state.
   let settledTransferIds: string[];
   if (res.paymentStatuses) {
+    const normalizedStatuses = res.paymentStatuses.map((status) => {
+      const tid =
+        status.transferId ||
+        (status.fromUserId && status.toUserId
+          ? `transfer_${status.fromUserId}_${status.toUserId}`
+          : '');
+      return { ...status, transferId: tid };
+    });
+
     const cloudSettledSet = new Set(
-      res.paymentStatuses.filter((status) => status.isPaid).map((status) => status.transferId)
+      normalizedStatuses
+        .filter((status) => status.isPaid && status.transferId)
+        .map((status) => status.transferId)
     );
     const localSettledSet = new Set(local.settledTransferIds || []);
 
     const allTransferIds = new Set([
-      ...res.paymentStatuses.map((status) => status.transferId),
+      ...normalizedStatuses.map((status) => status.transferId).filter(Boolean),
       ...localSettledSet,
     ]);
 
@@ -203,6 +215,38 @@ export function mergeCloudParty(
     settledTransferIds = local.settledTransferIds || [];
   }
 
+  // Merge shopping items with conflict resolution (preserve pending local writes)
+  const rawCloudShopping = res.shoppingList ? mapCloudShoppingList(res.shoppingList) : [];
+  const cloudShoppingById = new Map(rawCloudShopping.map((item) => [item.id, item]));
+  const localShoppingById = new Map((local.shoppingList || []).map((item) => [item.id, item]));
+
+  const shoppingList = rawCloudShopping.map((cloudItem) => {
+    const localItem = localShoppingById.get(cloudItem.id);
+    const hasPendingMutation = isOperationPendingForShoppingItem(local.id, cloudItem.id);
+    if (localItem && hasPendingMutation) {
+      return localItem;
+    }
+    return cloudItem;
+  });
+
+  // Keep locally added items that are in the queue / pending upload or recently added
+  const now = Date.now();
+  for (const localItem of local.shoppingList || []) {
+    if (!cloudShoppingById.has(localItem.id)) {
+      const hasPendingMutation = isOperationPendingForShoppingItem(local.id, localItem.id);
+      let isRecent = false;
+      if (localItem.createdAt) {
+        const itemAge = now - new Date(localItem.createdAt).getTime();
+        if (!isNaN(itemAge) && itemAge < 90000) {
+          isRecent = true;
+        }
+      }
+      if (hasPendingMutation || isRecent) {
+        shoppingList.unshift(localItem);
+      }
+    }
+  }
+
   return {
     profiles,
     pendingUpload,
@@ -213,7 +257,7 @@ export function mergeCloudParty(
       title: res.party.title,
       participants: profiles.length > 0 ? profiles : local.participants,
       expenses,
-      shoppingList: res.shoppingList ? mapCloudShoppingList(res.shoppingList) : local.shoppingList || [],
+      shoppingList: shoppingList.length > 0 || res.shoppingList ? shoppingList : local.shoppingList || [],
       settledTransferIds,
       deletedExpenseIds: remainingTombstones,
       pendingExpenseIds: remainingPending,

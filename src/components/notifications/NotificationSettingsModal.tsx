@@ -1,7 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import {
-  Alert,
-  AppState,
   Platform,
   ScrollView,
   StyleSheet,
@@ -18,7 +16,6 @@ import { ThemeTokens, useTheme } from '../../context/ThemeContext';
 import { useNotificationStore } from '../../store/useNotificationStore';
 import { useToast } from '../common/Toast';
 import { NotificationType } from '../../types';
-import { openSystemNotificationSettings } from '../../services/notificationService';
 
 interface NotificationSettingsModalProps {
   visible: boolean;
@@ -35,69 +32,13 @@ export const NotificationSettingsModal: React.FC<NotificationSettingsModalProps>
 
   const preferences = useNotificationStore((s) => s.preferences);
   const updatePreferences = useNotificationStore((s) => s.updatePreferences);
-  const permissionStatus = useNotificationStore((s) => s.permissionStatus);
-  const requestPermission = useNotificationStore((s) => s.requestPermission);
-  const refreshPermissionStatus = useNotificationStore((s) => s.refreshPermissionStatus);
   const dispatchNotification = useNotificationStore((s) => s.dispatchNotification);
-
-  const [isRequestingPerm, setIsRequestingPerm] = useState(false);
-
-  // Automatically check if notifications got allowed when modal is opened or app returns from settings
-  useEffect(() => {
-    if (visible) {
-      void refreshPermissionStatus();
-    }
-  }, [visible, refreshPermissionStatus]);
-
-  useEffect(() => {
-    if (!visible) return;
-
-    const sub = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active') {
-        void refreshPermissionStatus();
-      }
-    });
-
-    return () => {
-      sub.remove();
-    };
-  }, [visible, refreshPermissionStatus]);
 
   const handleMasterToggle = (val: boolean) => {
     updatePreferences({ enabled: val });
   };
 
-  const promptOpenSettings = () => {
-    Alert.alert(
-      'Уведомления отключены в системе',
-      'Чтобы получать уведомления о счетах и переводах в шторку телефона, включите разрешение для PartySplit в настройках устройства.',
-      [
-        { text: 'Отмена', style: 'cancel' },
-        {
-          text: 'В настройки',
-          onPress: () => {
-            void openSystemNotificationSettings();
-          },
-        },
-      ]
-    );
-  };
-
-  const handleChannelToggle = async (channel: 'system' | 'inApp', val: boolean) => {
-    if (channel === 'system' && val) {
-      if (permissionStatus === 'denied') {
-        promptOpenSettings();
-        return;
-      }
-      if (permissionStatus === 'undetermined') {
-        const granted = await requestPermission();
-        if (!granted) {
-          showToast('Системное разрешение не получено', { type: 'warning' });
-          return;
-        }
-      }
-    }
-
+  const handleChannelToggle = (channel: 'inApp', val: boolean) => {
     updatePreferences({
       channels: {
         ...preferences.channels,
@@ -115,31 +56,12 @@ export const NotificationSettingsModal: React.FC<NotificationSettingsModalProps>
     });
   };
 
-  const handleRequestSystemPerm = async () => {
-    if (permissionStatus === 'denied') {
-      promptOpenSettings();
-      return;
-    }
-
-    setIsRequestingPerm(true);
-    try {
-      const granted = await requestPermission();
-      if (granted) {
-        showToast('Системные уведомления разрешены!', { type: 'success' });
-      } else {
-        showToast('Доступ к уведомлениям отклонен в системе', { type: 'error' });
-      }
-    } finally {
-      setIsRequestingPerm(false);
-    }
-  };
-
   const handleSendTest = async () => {
     await dispatchNotification('party_invite', {
       partyTitle: 'Бар «Руки Вверх»',
       amount: 1450,
       actorName: 'Саня',
-      forceInApp: false,
+      forceInApp: true,
     });
     showToast('Тестовое уведомление отправлено!', { type: 'info' });
   };
@@ -203,7 +125,7 @@ export const NotificationSettingsModal: React.FC<NotificationSettingsModalProps>
             <View style={styles.headerTextWrap}>
               <Text style={styles.modalTitle}>Центр уведомлений</Text>
               <Text style={styles.modalSubtitle}>
-                Настройка push-оповещений и in-app плашек
+                Уведомления и события в приложении
               </Text>
             </View>
           </View>
@@ -257,7 +179,7 @@ export const NotificationSettingsModal: React.FC<NotificationSettingsModalProps>
                   </View>
                 </View>
                 <Text style={styles.masterDesc}>
-                  Мастер-переключатель для быстрой тишины во всех каналах
+                  Включение и выключение всех всплывающих уведомлений в приложении
                 </Text>
               </View>
               <Switch
@@ -273,71 +195,21 @@ export const NotificationSettingsModal: React.FC<NotificationSettingsModalProps>
           </Card>
 
           {/* Delivery Channels */}
-          <Text style={styles.sectionHeading}>Каналы доставки</Text>
+          <Text style={styles.sectionHeading}>Отображение</Text>
           <Card style={styles.sectionCard}>
-            {/* System Push Channel */}
-            <View style={styles.itemRow}>
-              <View style={[styles.itemIcon, { backgroundColor: `${theme.colors.primary}18` }]}>
-                <Ionicons
-                  name="phone-portrait-outline"
-                  size={19}
-                  color={theme.colors.primary}
-                />
-              </View>
-              <View style={styles.itemTextWrap}>
-                <Text style={styles.itemTitle}>На телефон (Push / Шторка)</Text>
-                <Text style={styles.itemDesc}>
-                  Уведомления на экране блокировки и в шторке смартфона
-                </Text>
-              </View>
-              <Switch
-                disabled={!preferences.enabled}
-                value={preferences.channels.system}
-                onValueChange={(val) => handleChannelToggle('system', val)}
-                trackColor={{
-                  false: theme.colors.surfaceBorder,
-                  true: theme.colors.primary,
-                }}
-                thumbColor={Platform.OS === 'android' ? '#FFFFFF' : undefined}
-              />
-            </View>
-
-            {/* Permission status prompt if not granted */}
-            {permissionStatus !== 'granted' && (
-              <TouchableOpacity
-                style={styles.permPrompt}
-                onPress={handleRequestSystemPerm}
-                disabled={isRequestingPerm}
-                activeOpacity={0.8}
-              >
-                <Ionicons
-                  name="shield-checkmark-outline"
-                  size={16}
-                  color={theme.colors.neonCyan}
-                />
-                <Text style={styles.permPromptText}>
-                  {permissionStatus === 'denied'
-                    ? 'Уведомления заблокированы в системе. Нажмите, чтобы запросить снова'
-                    : 'Требуется системное разрешение для отправки в шторку'}
-                </Text>
-              </TouchableOpacity>
-            )}
-
-            <View style={styles.separator} />
-
             {/* In-App Toasts Channel */}
             <View style={styles.itemRow}>
               <View style={[styles.itemIcon, { backgroundColor: `${theme.colors.neonCyan}18` }]}>
                 <Ionicons
-                  name="tablet-portrait-outline"
+                  name="notifications-outline"
                   size={19}
                   color={theme.colors.neonCyan}
                 />
               </View>
               <View style={styles.itemTextWrap}>
-                <Text style={styles.itemTitle}>Внутри приложения (In-App)</Text>
+                <Text style={styles.itemTitle}>Всплывающие плашки (In-App)</Text>
                 <Text style={styles.itemDesc}>
-                  Интерактивные всплывающие карточки со свайпом на экране
+                  Интерактивные карточки со свайпом при работе в приложении
                 </Text>
               </View>
               <Switch
@@ -569,23 +441,6 @@ function createStyles(theme: ThemeTokens) {
       height: 1,
       backgroundColor: `${theme.colors.surfaceBorder}60`,
       marginLeft: 50,
-    },
-    permPrompt: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: `${theme.colors.neonCyan}12`,
-      borderWidth: 1,
-      borderColor: `${theme.colors.neonCyan}30`,
-      borderRadius: 10,
-      padding: 10,
-      marginVertical: 8,
-      gap: 8,
-    },
-    permPromptText: {
-      fontSize: 11,
-      fontWeight: '600',
-      color: theme.colors.neonCyan,
-      flex: 1,
     },
     testSection: {
       marginTop: 8,

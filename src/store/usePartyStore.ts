@@ -9,7 +9,7 @@ import {
   UserProfile,
 } from '../types';
 import { DEFAULT_BANK, normalizeBank } from '../constants/banks';
-import { getAvatarColor } from '../utils/currency';
+import { formatRubles, getAvatarColor } from '../utils/currency';
 import { mergeCloudParty } from '../utils/cloudSync';
 import {
   getPartyDetailsFromCloud,
@@ -27,6 +27,7 @@ import {
 } from '../api/googleSheets';
 import {
   cancelCloudWrites,
+  flushOfflineQueue,
   getCloudWriteRevision,
   hasPendingCloudWrites,
   waitForCloudWrites,
@@ -537,10 +538,9 @@ export const usePartyStore = create<PartyState>((set, get) => ({
       party = removeDemoData(party);
     }
 
-    // A local (not yet shared) room always contains its authenticated owner.
-    // A cloud room is authoritative and is populated by server responses.
-    if (session && !party.code) {
-      party = refreshSelfInParty(party, session.user, true);
+    // A local room always contains its authenticated owner; for cloud rooms, refresh the owner's avatar/profile
+    if (session) {
+      party = refreshSelfInParty(party, session.user, !party.code);
     }
 
     await Promise.all([
@@ -587,9 +587,6 @@ export const usePartyStore = create<PartyState>((set, get) => ({
     const { session, currentParty } = get();
     if (!session) return { success: false, error: 'Требуется авторизация' };
 
-    const previousSession = session;
-    const previousParty = currentParty;
-
     const nextAvatarUrl =
       data.avatarUrl === null
         ? undefined
@@ -607,21 +604,7 @@ export const usePartyStore = create<PartyState>((set, get) => ({
       avatarUrl: nextAvatarUrl,
     };
     const optimisticSession = { ...session, user: optimisticUser };
-    const optimisticParty: PartyEvent = {
-      ...currentParty,
-      participants: (currentParty.participants || []).map((participant) =>
-        participant.id === optimisticUser.id
-          ? {
-              ...participant,
-              name: optimisticUser.name,
-              phone: optimisticUser.phone,
-              bank: optimisticUser.bank,
-              avatarColor: participant.avatarColor || optimisticUser.avatarColor,
-              avatarUrl: optimisticUser.avatarUrl,
-            }
-          : participant
-      ),
-    };
+    const optimisticParty = refreshSelfInParty(currentParty, optimisticUser, true);
 
     // If no password change, update store & storage immediately and sync in background
     if (!data.newPassword) {
@@ -639,12 +622,9 @@ export const usePartyStore = create<PartyState>((set, get) => ({
           partyId: currentParty?.id,
         },
         {
-          failureMessage: 'Не удалось обновить профиль',
+          failureMessage: 'Не удалось синхронизировать профиль с сервером',
           onFailure: () => {
-            // Roll back to previous profile on failure
-            set({ session: previousSession, currentParty: previousParty });
-            void saveItem(STORAGE_KEYS.AUTH_SESSION, previousSession);
-            void saveItem(STORAGE_KEYS.CURRENT_PARTY, previousParty);
+            // Keep local optimistic profile/avatar; do not roll back and erase user avatar
           },
         }
       );
@@ -674,21 +654,7 @@ export const usePartyStore = create<PartyState>((set, get) => ({
     };
     const updatedSession = { ...session, user: updatedUser };
 
-    const updatedParty: PartyEvent = {
-      ...currentParty,
-      participants: (currentParty.participants || []).map((participant) =>
-        participant.id === updatedUser.id
-          ? {
-              ...participant,
-              name: updatedUser.name,
-              phone: updatedUser.phone,
-              bank: updatedUser.bank,
-              avatarColor: participant.avatarColor || updatedUser.avatarColor,
-              avatarUrl: updatedUser.avatarUrl,
-            }
-          : participant
-      ),
-    };
+    const updatedParty = refreshSelfInParty(currentParty, updatedUser, true);
 
     set({ session: updatedSession, currentParty: updatedParty });
     void saveItem(STORAGE_KEYS.AUTH_SESSION, updatedSession);
@@ -764,7 +730,7 @@ export const usePartyStore = create<PartyState>((set, get) => ({
 
   syncPartyFromCloud: (partyData) => {
     const current = get().currentParty;
-    const mergedParty =
+    let mergedParty =
       normalizePartyEvent(
         {
           ...current,
@@ -782,6 +748,12 @@ export const usePartyStore = create<PartyState>((set, get) => ({
         },
         current.id
       ) || current;
+
+    // Preserve the current user's profile and avatar in mergedParty so background polling never blanks it out
+    const sessionUser = get().session?.user;
+    if (sessionUser) {
+      mergedParty = refreshSelfInParty(mergedParty, sessionUser, false);
+    }
 
     const syncedAt = new Date().toISOString();
     if (partySignature(current) === partySignature(mergedParty)) {
@@ -825,25 +797,124 @@ export const usePartyStore = create<PartyState>((set, get) => ({
         });
       }
 
-      // Check if expenses changed for current user
-      if (current.expenses && mergedParty.expenses && current.expenses.length > 0) {
-        const prevCount = current.expenses.length;
-        const nextCount = mergedParty.expenses.length;
-        if (prevCount !== nextCount) {
-          const userShare = (mergedParty.expenses || []).reduce((acc, exp) => {
-            const splits = exp.splitBetween || [];
-            const isIncluded = splits.some((s) => s.userId === currentUser.id);
-            if (isIncluded && splits.length > 0) {
-              return acc + exp.amount / splits.length;
-            }
-            return acc;
-          }, 0);
+      // Check if expenses changed for participants of those cheques
+      if (current.expenses && mergedParty.expenses) {
+        const prevExpenses = current.expenses;
+        const nextExpenses = mergedParty.expenses;
+        const prevMap = new Map(prevExpenses.map((e) => [e.id, e]));
+        const nextMap = new Map(nextExpenses.map((e) => [e.id, e]));
+        const pendingIds = new Set(current.pendingExpenseIds || []);
+        const deletedIds = new Set(current.deletedExpenseIds || []);
 
-          useNotificationStore.getState().dispatchNotification('bill_change', {
-            partyTitle: mergedParty.title,
-            partyId: mergedParty.id,
-            amount: userShare > 0 ? userShare : undefined,
-          });
+        const isUserParticipant = (exp: ExpenseItem) => {
+          return (
+            exp.paidById === currentUser.id ||
+            (exp.splitBetween || []).some((s) => s.userId === currentUser.id)
+          );
+        };
+
+        // 1. Newly added cheques where current user is a participant
+        for (const nextExp of nextExpenses) {
+          if (!prevMap.has(nextExp.id) && !pendingIds.has(nextExp.id)) {
+            if (isUserParticipant(nextExp)) {
+              const splits = nextExp.splitBetween || [];
+              const isIncluded = splits.some((s) => s.userId === currentUser.id);
+              const share =
+                isIncluded && splits.length > 0
+                  ? Math.round(nextExp.amount / splits.length)
+                  : undefined;
+
+              useNotificationStore.getState().dispatchNotification('bill_change', {
+                partyTitle: mergedParty.title,
+                partyId: mergedParty.id,
+                amount: share,
+                customMessage:
+                  isIncluded && share
+                    ? `В чек «${nextExp.title}» добавлена ваша доля: ${share} ₽ (общая сумма: ${formatRubles(nextExp.amount)})`
+                    : `В счёте «${mergedParty.title}» добавлен чек «${nextExp.title}» (${formatRubles(nextExp.amount)})`,
+              });
+            }
+          }
+        }
+
+        // 2. Modified cheques where current user was or is a participant
+        for (const nextExp of nextExpenses) {
+          const prevExp = prevMap.get(nextExp.id);
+          if (prevExp) {
+            const amountChanged = Math.abs(prevExp.amount - nextExp.amount) > 0.01;
+            const titleChanged = prevExp.title !== nextExp.title;
+            const payerChanged = prevExp.paidById !== nextExp.paidById;
+            const prevSplits = (prevExp.splitBetween || []).map((s) => s.userId).sort().join(',');
+            const nextSplits = (nextExp.splitBetween || []).map((s) => s.userId).sort().join(',');
+            const splitsChanged = prevSplits !== nextSplits;
+
+            if (amountChanged || titleChanged || payerChanged || splitsChanged) {
+              const wasPart = isUserParticipant(prevExp);
+              const isPart = isUserParticipant(nextExp);
+              const hasLocalPending = expenseUpdateStates.has(
+                expenseUpdateKey(mergedParty.id, nextExp.id)
+              );
+
+              if ((wasPart || isPart) && !hasLocalPending) {
+                const splits = nextExp.splitBetween || [];
+                const isIncluded = splits.some((s) => s.userId === currentUser.id);
+                const share =
+                  isIncluded && splits.length > 0
+                    ? Math.round(nextExp.amount / splits.length)
+                    : undefined;
+
+                let changeDesc = 'обновлены данные';
+                if (amountChanged && splitsChanged) {
+                  changeDesc = `изменилась сумма (${formatRubles(nextExp.amount)}) и состав участников`;
+                } else if (amountChanged) {
+                  changeDesc = `изменилась сумма: ${formatRubles(nextExp.amount)}`;
+                } else if (splitsChanged) {
+                  changeDesc = isIncluded
+                    ? 'вы добавлены в список скидывающихся'
+                    : 'изменился состав участников';
+                } else if (titleChanged) {
+                  changeDesc = `переименован в «${nextExp.title}»`;
+                }
+
+                useNotificationStore.getState().dispatchNotification('bill_change', {
+                  partyTitle: mergedParty.title,
+                  partyId: mergedParty.id,
+                  amount: share,
+                  customMessage:
+                    isIncluded && share
+                      ? `В чеке «${nextExp.title}» ${changeDesc}. Ваша доля: ${share} ₽`
+                      : `В счёте «${mergedParty.title}» по чеку «${nextExp.title}» ${changeDesc}`,
+                });
+              }
+            }
+          }
+        }
+
+        // 3. Removed cheques where current user was a participant
+        for (const prevExp of prevExpenses) {
+          if (!nextMap.has(prevExp.id) && !deletedIds.has(prevExp.id)) {
+            if (isUserParticipant(prevExp)) {
+              useNotificationStore.getState().dispatchNotification('bill_change', {
+                partyTitle: mergedParty.title,
+                partyId: mergedParty.id,
+                customMessage: `Чек «${prevExp.title}» (${formatRubles(prevExp.amount)}) удалён из счёта «${mergedParty.title}»`,
+              });
+            }
+          }
+        }
+
+        // 4. Newly added shopping items in the room
+        if (current.shoppingList && mergedParty.shoppingList) {
+          const prevShopMap = new Map((current.shoppingList || []).map((s) => [s.id, s]));
+          for (const nextShop of mergedParty.shoppingList || []) {
+            if (!prevShopMap.has(nextShop.id)) {
+              useNotificationStore.getState().dispatchNotification('bill_change', {
+                partyTitle: mergedParty.title,
+                partyId: mergedParty.id,
+                customMessage: `В список покупок тусы «${mergedParty.title}» добавлен товар «${nextShop.title}»`,
+              });
+            }
+          }
         }
       }
     }
@@ -1334,6 +1405,7 @@ export const usePartyStore = create<PartyState>((set, get) => ({
           category: newItem.category,
         }
       );
+      flushOfflineQueue();
     }
 
     return newItem;
@@ -1379,6 +1451,7 @@ export const usePartyStore = create<PartyState>((set, get) => ({
           category: updatedItem.category,
         }
       );
+      flushOfflineQueue();
     }
   },
 
@@ -1408,6 +1481,7 @@ export const usePartyStore = create<PartyState>((set, get) => ({
         updatedParty.id,
         { userId: session.user.id, token: session.token }
       );
+      flushOfflineQueue();
     }
   },
 
@@ -1566,6 +1640,7 @@ export const usePartyStore = create<PartyState>((set, get) => ({
         },
       }
     );
+    flushOfflineQueue();
 
     return { success: true };
   },

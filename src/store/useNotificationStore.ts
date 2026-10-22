@@ -14,7 +14,6 @@ import {
   NOTIFICATIONS_HISTORY_KEY,
   requestSystemPermission,
   saveStoredPreferences,
-  sendSystemNotification,
 } from '../services/notificationService';
 
 export interface DispatchNotificationOptions {
@@ -26,6 +25,8 @@ export interface DispatchNotificationOptions {
   data?: Record<string, any>;
   /** Force in-app toast even if category or master toggle is off (useful for previews/tests) */
   forceInApp?: boolean;
+  /** Force system notification even if app is active (useful for testing/previews) */
+  forceSystem?: boolean;
 }
 
 interface NotificationState {
@@ -38,6 +39,7 @@ interface NotificationState {
 
   init: () => Promise<void>;
   refreshPermissionStatus: () => Promise<'granted' | 'denied' | 'undetermined'>;
+  ensureNotificationPermission: () => Promise<boolean>;
   updatePreferences: (
     updater:
       | Partial<NotificationPreferences>
@@ -69,14 +71,7 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
     try {
       await initializeNotificationService();
       const prefs = await getStoredPreferences();
-      let perm = await checkSystemPermission();
-
-      // Mandatory permission check and prompt on app start/login:
-      // If undetermined, prompt native OS permission dialog (Android 13+ POST_NOTIFICATIONS / iOS / Web)
-      if (perm === 'undetermined') {
-        const granted = await requestSystemPermission();
-        perm = granted ? 'granted' : 'denied';
-      }
+      const perm: 'granted' | 'denied' | 'undetermined' = 'denied';
 
       let history: AppNotification[] = [];
       try {
@@ -136,6 +131,10 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
       console.warn('[NotificationStore] refreshPermissionStatus error:', err);
       return get().permissionStatus;
     }
+  },
+
+  ensureNotificationPermission: async () => {
+    return false;
   },
 
   updatePreferences: async (updater) => {
@@ -217,16 +216,9 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
       (err) => console.warn('[NotificationStore] Save history error:', err)
     );
 
-    // Channel 1: In-App toast
+    // In-App notification banner (active inside the app)
     if (preferences.channels.inApp || options.forceInApp) {
       set({ activeInAppNotification: newNotification });
-    }
-
-    // Channel 2: System shade push / local notification
-    if (preferences.channels.system && !options.forceInApp) {
-      sendSystemNotification(newNotification).catch((err) =>
-        console.warn('[NotificationStore] System notification error:', err)
-      );
     }
 
     return newNotification;

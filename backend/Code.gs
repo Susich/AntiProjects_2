@@ -44,9 +44,9 @@ var SHEET_SHOPPING = 'ShoppingList';
 
 // Bump this when the schema/migrations change so the six-hour init cache is
 // invalidated automatically.
-var SCHEMA_VERSION = 4;
+var SCHEMA_VERSION = 5;
 var SCHEMA_CACHE_KEY = 'party_split_schema_v' + SCHEMA_VERSION;
-var PARTY_CACHE_PREFIX = 'party_details_v1_';
+var PARTY_CACHE_PREFIX = 'party_details_v2_';
 var PARTY_CACHE_TTL_SECONDS = 30;
 var USER_AUTH_PREFIX = 'user_auth_';
 var USER_DATA_PREFIX = 'user_data_';
@@ -69,12 +69,9 @@ function getCachedAuth(userId, token) {
   if (!userId || !token) return null;
   try {
     var cache = CacheService.getScriptCache();
-    var storedToken = cache.get(USER_AUTH_PREFIX + userId);
-    if (storedToken && storedToken === token) {
-      var rawUser = cache.get(USER_DATA_PREFIX + userId);
-      if (rawUser) {
-        return JSON.parse(rawUser);
-      }
+    var rawUser = cache.get(USER_AUTH_PREFIX + userId + '_' + token);
+    if (rawUser) {
+      return JSON.parse(rawUser);
     }
   } catch (err) {
     // Ignore cache lookup errors
@@ -86,17 +83,19 @@ function setCachedAuth(userId, token, user) {
   if (!userId || !token || !user) return;
   try {
     var cache = CacheService.getScriptCache();
-    cache.put(USER_AUTH_PREFIX + userId, token, USER_AUTH_TTL_SECONDS);
-    cache.put(USER_DATA_PREFIX + userId, JSON.stringify(user), USER_AUTH_TTL_SECONDS);
+    cache.put(USER_AUTH_PREFIX + userId + '_' + token, JSON.stringify(user), USER_AUTH_TTL_SECONDS);
   } catch (err) {
     // Ignore cache write errors
   }
 }
 
-function invalidateCachedAuth(userId) {
+function invalidateCachedAuth(userId, token) {
   if (!userId) return;
   try {
     var cache = CacheService.getScriptCache();
+    if (token) {
+      cache.remove(USER_AUTH_PREFIX + userId + '_' + token);
+    }
     cache.remove(USER_AUTH_PREFIX + userId);
     cache.remove(USER_DATA_PREFIX + userId);
   } catch (err) {
@@ -187,7 +186,10 @@ function readSheetRows(sheet, columns) {
   if (!sheet) return [];
   var lastRow = sheet.getLastRow();
   if (lastRow < 2) return [];
-  return sheet.getRange(2, 1, lastRow - 1, columns).getValues();
+  var lastCol = sheet.getLastColumn();
+  if (lastCol === 0) return [];
+  var colsToRead = Math.min(columns, lastCol);
+  return sheet.getRange(2, 1, lastRow - 1, colsToRead).getValues();
 }
 
 /** Finds one row by an exact value in one column without loading the sheet. */
@@ -196,6 +198,8 @@ function findRowByColumnValue(sheet, column, value, columns) {
   if (!sheet || !needle) return null;
   var lastRow = sheet.getLastRow();
   if (lastRow < 2) return null;
+  var lastCol = sheet.getLastColumn();
+  if (column > lastCol) return null;
 
   var match = sheet
     .getRange(2, column, lastRow - 1, 1)
@@ -204,9 +208,10 @@ function findRowByColumnValue(sheet, column, value, columns) {
     .findNext();
   if (!match) return null;
 
+  var colsToRead = Math.min(columns, lastCol);
   return {
     rowIndex: match.getRow(),
-    row: sheet.getRange(match.getRow(), 1, 1, columns).getValues()[0]
+    row: sheet.getRange(match.getRow(), 1, 1, colsToRead).getValues()[0]
   };
 }
 
@@ -323,12 +328,12 @@ function handleApiAction(action, data) {
     return jsonResponse({
       success: true,
       apiVersion: API_VERSION,
-      latestVersion: '1.0.1',
-      apkUrl: 'https://drive.usercontent.google.com/download?id=1Xj-OHVMDlsZKlZfOqkJPza-RSejNJH4M&export=download&confirm=t',
+      latestVersion: '1.0.5',
+      apkUrl: 'https://drive.google.com/uc?export=download&id=1Xj-OHVMDlsZKlZfOqkJPza-RSejNJH4M',
       googleDriveFileId: '1Xj-OHVMDlsZKlZfOqkJPza-RSejNJH4M',
-      releaseNotes: '• Улучшена доставка системных уведомлений в шторку Android 13+\n• Исправлено отображение нижнего таб-бара на смартфонах\n• Добавлен механизм автоматического обновления приложения через Google Диск\n• Оптимизация фоновой синхронизации расходов',
+      releaseNotes: 'Исправление синхронизации и багов верстки',
       minSupportedVersion: '1.0.0',
-      publishedAt: '2026-10-21',
+      publishedAt: '2026-10-22',
       fileSizeMb: 42
     });
   }
@@ -559,8 +564,11 @@ function authenticate(ss, data) {
     return { error: 'Пользователь не найден. Войдите в аккаунт заново.' };
   }
 
-  var storedToken = (found.row[8] || '').toString();
-  if (!storedToken || storedToken !== token) {
+  var storedTokenRaw = (found.row[8] || '').toString();
+  var storedTokens = storedTokenRaw
+    ? storedTokenRaw.split(',').map(function (t) { return t.trim(); }).filter(Boolean)
+    : [];
+  if (storedTokens.length === 0 || storedTokens.indexOf(token) === -1) {
     return { error: 'Сессия истекла. Войдите в аккаунт заново.' };
   }
 
@@ -656,7 +664,15 @@ function loginUser(ss, data) {
 
   var token = Utilities.getUuid();
   var now = new Date().toISOString();
-  found.sheet.getRange(found.rowIndex, 9).setValue(token);
+  var existingTokensRaw = (found.row[8] || '').toString();
+  var tokens = existingTokensRaw
+    ? existingTokensRaw.split(',').map(function (t) { return t.trim(); }).filter(Boolean)
+    : [];
+  tokens.push(token);
+  if (tokens.length > 10) {
+    tokens = tokens.slice(tokens.length - 10);
+  }
+  found.sheet.getRange(found.rowIndex, 9).setValue(tokens.join(','));
   found.sheet.getRange(found.rowIndex, 6).setValue(now);
 
   var loggedUser = publicUser(found.row);
@@ -718,7 +734,7 @@ function updateUserProfile(ss, data) {
     sheet.getRange(rowIndex, 7, 1, 2).setValues([[hash, salt]]);
   }
 
-  // If partyId is provided, also update user's bank in PartyMembers and invalidate party cache
+  // Update user's bank in PartyMembers if partyId provided
   var partyId = (data.partyId || '').toString();
   if (partyId) {
     try {
@@ -731,10 +747,25 @@ function updateUserProfile(ss, data) {
           break;
         }
       }
-      invalidatePartyCache(partyId);
     } catch (e) {
       // Non-critical if party update fails
     }
+  }
+
+  // Invalidate cache for all rooms the user is a member of so other users see the new avatar immediately
+  try {
+    var allMembersSheet = ss.getSheetByName(SHEET_MEMBERS);
+    var allMemberRows = readSheetRows(allMembersSheet, 2);
+    for (var m = 0; m < allMemberRows.length; m++) {
+      if ((allMemberRows[m][1] || '').toString() === auth.user.id) {
+        invalidatePartyCache((allMemberRows[m][0] || '').toString());
+      }
+    }
+  } catch (e) {
+    // Non-critical if cache invalidation fails
+  }
+  if (partyId) {
+    invalidatePartyCache(partyId);
   }
 
   var updatedUserData = {
@@ -757,8 +788,8 @@ function updateUserProfile(ss, data) {
 // ---------------------------------------------------------------------------
 
 function findPartyRow(ss, data) {
-  var partyId = (data.partyId || '').toString();
-  var code = data.code ? data.code.toString().toUpperCase().trim() : '';
+  var partyId = (data.partyId || data.roomId || '').toString();
+  var code = (data.code || data.roomCode || '').toString().toUpperCase().trim();
   var sheet = ss.getSheetByName(SHEET_PARTIES);
 
   var found = null;
@@ -813,7 +844,7 @@ function buildPartyDetailsPayload(ss, party, memberData) {
   if (!party) return { success: false, error: 'Тусовка не найдена' };
 
   var members = memberData || getPartyMemberData(ss, party.id);
-  var userRows = readSheetRows(ss.getSheetByName(SHEET_USERS), 4);
+  var userRows = readSheetRows(ss.getSheetByName(SHEET_USERS), 5);
   var usersMap = {};
   for (var u = 0; u < userRows.length; u++) {
     var uid = (userRows[u][0] || '').toString();
@@ -822,7 +853,8 @@ function buildPartyDetailsPayload(ss, party, memberData) {
       id: uid,
       name: (userRows[u][1] || 'Участник').toString(),
       phone: (userRows[u][2] || '').toString(),
-      bank: normalizeBank(userRows[u][3])
+      bank: normalizeBank(userRows[u][3]),
+      avatarUrl: (userRows[u][4] || '').toString() || undefined
     };
   }
 
@@ -839,7 +871,8 @@ function buildPartyDetailsPayload(ss, party, memberData) {
       id: base.id,
       name: base.name,
       phone: base.phone,
-      bank: members.bankByUserId[mid] || base.bank
+      bank: members.bankByUserId[mid] || base.bank,
+      avatarUrl: base.avatarUrl
     });
   }
 
@@ -885,7 +918,8 @@ function buildPartyDetailsPayload(ss, party, memberData) {
     });
   }
 
-  var shopRows = readSheetRows(ss.getSheetByName(SHEET_SHOPPING), 11);
+  var shoppingSheet = getOrCreateShoppingSheet(ss);
+  var shopRows = readSheetRows(shoppingSheet, 11);
   var shoppingList = [];
   for (var sh = 0; sh < shopRows.length; sh++) {
     if ((shopRows[sh][1] || '').toString() !== party.id) continue;
@@ -1355,11 +1389,14 @@ function setTransferStatus(ss, data) {
   var auth = requireMember(ss, data, party.id);
   if (auth.error) return errorResponse(auth.error);
 
-  var transferId = (data.transferId || '').toString();
-  var fromUserId = (data.fromUserId || '').toString();
+  var fromUserId = (data.fromUserId || data.userId || '').toString();
   var toUserId = (data.toUserId || '').toString();
+  var transferId = (data.transferId || '').toString();
+  if (!transferId && fromUserId && toUserId) {
+    transferId = 'transfer_' + fromUserId + '_' + toUserId;
+  }
   var amount = Number(data.amount);
-  var isPaid = data.isPaid === true || data.isPaid === 'true';
+  var isPaid = data.isPaid === true || data.isPaid === 'true' || data.isPaid === 1;
 
   if (!transferId || !fromUserId || !toUserId || isNaN(amount) || amount <= 0) {
     return errorResponse('Некорректные данные статуса перевода');
@@ -1371,10 +1408,19 @@ function setTransferStatus(ss, data) {
   }
 
   var sheet = ss.getSheetByName(SHEET_STATUSES);
-  var existing = findRowByColumnValue(sheet, 2, transferId, 8);
-  var rowIndex = existing && (existing.row[0] || '').toString() === party.id
-    ? existing.rowIndex
-    : -1;
+  var rows = readSheetRows(sheet, 8);
+  var rowIndex = -1;
+  for (var r = 0; r < rows.length; r++) {
+    if ((rows[r][0] || '').toString() === party.id) {
+      var rowTid = (rows[r][1] || '').toString();
+      var rowFrom = (rows[r][2] || '').toString();
+      var rowTo = (rows[r][3] || '').toString();
+      if (rowTid === transferId || (rowFrom === fromUserId && rowTo === toUserId)) {
+        rowIndex = r + 2;
+        break;
+      }
+    }
+  }
 
   var now = new Date().toISOString();
   if (rowIndex > 0) {
@@ -1405,6 +1451,21 @@ function setTransferStatus(ss, data) {
 // Shopping List actions
 // ---------------------------------------------------------------------------
 
+function getOrCreateShoppingSheet(ss) {
+  var sheet = ss.getSheetByName(SHEET_SHOPPING);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_SHOPPING);
+    sheet.appendRow([
+      'id', 'partyId', 'title', 'estimatedAmount', 'assignedUserId',
+      'isBought', 'boughtById', 'actualAmount', 'convertedExpenseId',
+      'category', 'createdAt'
+    ]);
+    sheet.getRange(1, 1, 1, 11).setFontWeight('bold').setBackground('#E2E8F0');
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
 function addShoppingItem(ss, data) {
   var party = findPartyRow(ss, data);
   if (!party) return errorResponse('Тусовка не найдена');
@@ -1423,12 +1484,21 @@ function addShoppingItem(ss, data) {
   var category = (data.category || '').toString();
   var createdAt = (data.createdAt || '').toString() || new Date().toISOString();
 
-  var sheet = ss.getSheetByName(SHEET_SHOPPING);
-  sheet.appendRow([
-    id, party.id, title, estimatedAmount || '', assignedUserId,
-    isBought, boughtById, actualAmount || '', convertedExpenseId,
-    category, createdAt
-  ]);
+  var sheet = getOrCreateShoppingSheet(ss);
+  var existing = findRowByColumnValue(sheet, 1, id, 11);
+
+  if (existing && (existing.row[1] || '').toString() === party.id) {
+    sheet.getRange(existing.rowIndex, 3, 1, 8).setValues([[
+      title, estimatedAmount || '', assignedUserId, isBought, boughtById,
+      actualAmount || '', convertedExpenseId, category
+    ]]);
+  } else {
+    sheet.appendRow([
+      id, party.id, title, estimatedAmount || '', assignedUserId,
+      isBought, boughtById, actualAmount || '', convertedExpenseId,
+      category, createdAt
+    ]);
+  }
   invalidatePartyCache(party.id);
 
   return jsonResponse({
@@ -1453,28 +1523,36 @@ function updateShoppingItem(ss, data) {
   var itemId = (data.id || data.itemId || '').toString();
   if (!itemId) return errorResponse('Укажите id покупки');
 
-  var sheet = ss.getSheetByName(SHEET_SHOPPING);
+  var sheet = getOrCreateShoppingSheet(ss);
   var existing = findRowByColumnValue(sheet, 1, itemId, 11);
-  if (!existing) return errorResponse('Покупка не найдена');
 
-  var partyId = (existing.row[1] || '').toString();
+  var partyId = existing ? (existing.row[1] || '').toString() : (data.partyId || data.roomId || '').toString();
   var party = findPartyRow(ss, { partyId: partyId });
   if (!party) return errorResponse('Тусовка не найдена');
   var auth = requireMember(ss, data, party.id);
   if (auth.error) return errorResponse(auth.error);
 
-  var title = data.title !== undefined ? (data.title || '').toString().trim() : existing.row[2];
-  var estimatedAmount = data.estimatedAmount !== undefined ? (Number(data.estimatedAmount) || '') : existing.row[3];
-  var assignedUserId = data.assignedUserId !== undefined ? (data.assignedUserId || '').toString() : existing.row[4];
-  var isBought = data.isBought !== undefined ? (data.isBought === true || data.isBought === 'true') : existing.row[5];
-  var boughtById = data.boughtById !== undefined ? (data.boughtById || '').toString() : existing.row[6];
-  var actualAmount = data.actualAmount !== undefined ? (Number(data.actualAmount) || '') : existing.row[7];
-  var convertedExpenseId = data.convertedExpenseId !== undefined ? (data.convertedExpenseId || '').toString() : existing.row[8];
-  var category = data.category !== undefined ? (data.category || '').toString() : existing.row[9];
+  var title = data.title !== undefined ? (data.title || '').toString().trim() : (existing ? existing.row[2] : 'Покупка');
+  var estimatedAmount = data.estimatedAmount !== undefined ? (Number(data.estimatedAmount) || '') : (existing ? existing.row[3] : '');
+  var assignedUserId = data.assignedUserId !== undefined ? (data.assignedUserId || '').toString() : (existing ? existing.row[4] : '');
+  var isBought = data.isBought !== undefined ? (data.isBought === true || data.isBought === 'true') : (existing ? existing.row[5] : false);
+  var boughtById = data.boughtById !== undefined ? (data.boughtById || '').toString() : (existing ? existing.row[6] : '');
+  var actualAmount = data.actualAmount !== undefined ? (Number(data.actualAmount) || '') : (existing ? existing.row[7] : '');
+  var convertedExpenseId = data.convertedExpenseId !== undefined ? (data.convertedExpenseId || '').toString() : (existing ? existing.row[8] : '');
+  var category = data.category !== undefined ? (data.category || '').toString() : (existing ? existing.row[9] : '');
 
-  sheet.getRange(existing.rowIndex, 3, 1, 8).setValues([[
-    title, estimatedAmount, assignedUserId, isBought, boughtById, actualAmount, convertedExpenseId, category
-  ]]);
+  if (existing) {
+    sheet.getRange(existing.rowIndex, 3, 1, 8).setValues([[
+      title, estimatedAmount, assignedUserId, isBought, boughtById, actualAmount, convertedExpenseId, category
+    ]]);
+  } else {
+    var createdAt = new Date().toISOString();
+    sheet.appendRow([
+      itemId, party.id, title, estimatedAmount, assignedUserId,
+      isBought, boughtById, actualAmount, convertedExpenseId,
+      category, createdAt
+    ]);
+  }
   invalidatePartyCache(party.id);
 
   return jsonResponse({ success: true });

@@ -1,6 +1,6 @@
 {
   "name": "antiprojects",
-  "version": "1.0.1",
+  "version": "1.0.5",
   "main": "index.ts",
   "dependencies": {
     "@expo/metro-runtime": "~58.0.14",
@@ -13,6 +13,7 @@
     "expo-file-system": "~58.0.10",
     "expo-font": "~58.0.9",
     "expo-haptics": "~58.0.7",
+    "expo-image-manipulator": "~58.0.15",
     "expo-image-picker": "~58.0.10",
     "expo-intent-launcher": "~58.0.3",
     "expo-notifications": "~58.1.6",
@@ -38,6 +39,7 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
+    "test": "node --test tests/semver.test.ts tests/debtSync.test.ts",
     "postinstall": "node scripts/patch-expo-notifications.js"
   },
   "private": true

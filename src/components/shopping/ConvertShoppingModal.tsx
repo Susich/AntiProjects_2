@@ -15,7 +15,8 @@ import { usePartyStore } from '../../store/usePartyStore';
 import { Input } from '../common/Input';
 import { Button } from '../common/Button';
 import { BottomSheetModal } from '../common/BottomSheetModal';
-import { formatRubles, getAvatarColor, getInitials } from '../../utils/currency';
+import { formatRubles, getAvatarColor } from '../../utils/currency';
+import { Avatar } from '../common/Avatar';
 import { useToast } from '../common/Toast';
 
 interface ConvertShoppingModalProps {
@@ -69,10 +70,13 @@ const ConvertShoppingForm: React.FC<ConvertShoppingFormProps> = ({
   );
   const { showToast } = useToast();
 
-  const partyProfiles: UserProfile[] = useMemo(
-    () => currentParty.participants || [],
-    [currentParty.participants]
-  );
+  const partyProfiles: UserProfile[] = useMemo(() => {
+    return (currentParty.participants || []).map((p) =>
+      p.id === session?.user.id && session?.user.avatarUrl
+        ? { ...p, avatarUrl: session.user.avatarUrl }
+        : p
+    );
+  }, [currentParty.participants, session]);
 
   // Default payer: assigned user, or current user, or first participant
   const defaultPayerId = useMemo(() => {
@@ -226,14 +230,13 @@ const ConvertShoppingForm: React.FC<ConvertShoppingFormProps> = ({
                   onPress={() => setPaidById(p.id)}
                   activeOpacity={0.7}
                 >
-                  <View
-                    style={[
-                      styles.payerAvatar,
-                      { backgroundColor: p.avatarColor || getAvatarColor(p.name) },
-                    ]}
-                  >
-                    <Text style={styles.avatarInitials}>{getInitials(p.name)}</Text>
-                  </View>
+                  <Avatar
+                    url={p.avatarUrl}
+                    name={p.name}
+                    color={p.avatarColor || getAvatarColor(p.name)}
+                    size={22}
+                    style={{ marginRight: 6 }}
+                  />
                   <Text
                     style={[styles.payerName, isSelected && styles.payerNameActive]}
                     numberOfLines={1}
@@ -278,14 +281,13 @@ const ConvertShoppingForm: React.FC<ConvertShoppingFormProps> = ({
                   onPress={() => handleToggleConsumer(p.id)}
                   activeOpacity={0.7}
                 >
-                  <View
-                    style={[
-                      styles.consumerAvatar,
-                      { backgroundColor: p.avatarColor || getAvatarColor(p.name) },
-                    ]}
-                  >
-                    <Text style={styles.avatarInitials}>{getInitials(p.name)}</Text>
-                  </View>
+                  <Avatar
+                    url={p.avatarUrl}
+                    name={p.name}
+                    color={p.avatarColor || getAvatarColor(p.name)}
+                    size={22}
+                    style={{ marginRight: 6 }}
+                  />
                   <Text
                     style={[
                       styles.consumerName,

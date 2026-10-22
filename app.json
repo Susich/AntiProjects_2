@@ -2,7 +2,7 @@
   "expo": {
     "name": "PartySplit",
     "slug": "partysplit",
-    "version": "1.0.1",
+    "version": "1.0.5",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -13,7 +13,7 @@
     },
     "android": {
       "package": "com.partysplit.app",
-      "versionCode": 2,
+      "versionCode": 5,
       "adaptiveIcon": {
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundColor": "#0B0F17"

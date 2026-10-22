@@ -41,7 +41,13 @@ export const Avatar: React.FC<AvatarProps> = ({
   accessibilityLabel,
 }) => {
   const { theme } = useTheme();
+  const [prevUrl, setPrevUrl] = useState<string | null | undefined>(url);
   const [failedUri, setFailedUri] = useState<string | null>(null);
+
+  if (prevUrl !== url) {
+    setPrevUrl(url);
+    setFailedUri(null);
+  }
 
   const initials = getInitials(name || 'Участник');
   const bgColor = color || (name ? getAvatarColor(name) : theme.colors.primary);

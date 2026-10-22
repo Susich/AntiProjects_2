@@ -12,7 +12,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { ThemeTokens, useTheme } from '../../context/ThemeContext';
 import { ShoppingItem, UserProfile } from '../../types';
 import { usePartyStore } from '../../store/usePartyStore';
-import { formatRubles, getAvatarColor, getInitials } from '../../utils/currency';
+import { formatRubles, getAvatarColor } from '../../utils/currency';
+import { Avatar } from '../common/Avatar';
 import { useToast } from '../common/Toast';
 import { PARTY_PRESETS } from './AddShoppingItemModal';
 
@@ -56,8 +57,17 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
     [currentParty.participants]
   );
 
-  const getProfile = (id?: string): UserProfile | undefined =>
-    id ? participants.find((p) => p.id === id) : undefined;
+  const getProfile = (id?: string): UserProfile | undefined => {
+    if (!id) return undefined;
+    const found = participants.find((p) => p.id === id);
+    if (found && session?.user && found.id === session.user.id) {
+      return {
+        ...found,
+        avatarUrl: session.user.avatarUrl || found.avatarUrl,
+      };
+    }
+    return found;
+  };
 
   const activeItems = useMemo(
     () => shoppingList.filter((item) => !item.isBought),
@@ -312,20 +322,15 @@ export const ShoppingListView: React.FC<ShoppingListViewProps> = ({
                       onPress={() => handleToggleClaim(item)}
                       activeOpacity={0.7}
                     >
-                      <View
-                        style={[
-                          styles.assigneeMiniAvatar,
-                          {
-                            backgroundColor:
-                              assignedUser.avatarColor ||
-                              getAvatarColor(assignedUser.name),
-                          },
-                        ]}
-                      >
-                        <Text style={styles.assigneeMiniInitials}>
-                          {getInitials(assignedUser.name)}
-                        </Text>
-                      </View>
+                      <Avatar
+                        url={assignedUser.avatarUrl}
+                        name={assignedUser.name}
+                        color={
+                          assignedUser.avatarColor ||
+                          getAvatarColor(assignedUser.name)
+                        }
+                        size={16}
+                      />
                       <Text
                         style={[
                           styles.assignedBadgeText,
