@@ -16,7 +16,6 @@ import { getUserStats } from '../utils/profileStats';
 import { Card } from '../components/common/Card';
 import { ProfileEditModal } from '../components/profile/ProfileEditModal';
 import { ThemeSelectorModal } from '../components/common/ThemeSelectorModal';
-import { CloudSyncModal } from '../components/party/CloudSyncModal';
 import { AnimatedNumber } from '../components/common/AnimatedNumber';
 import { ShareAppModal } from '../components/common/ShareAppModal';
 import { UpdateModal } from '../components/update/UpdateModal';
@@ -58,7 +57,6 @@ export const ProfileScreen: React.FC = () => {
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [isAvatarModalOpen, setIsAvatarModalOpen] = useState(false);
   const [isThemeOpen, setIsThemeOpen] = useState(false);
-  const [isCloudOpen, setIsCloudOpen] = useState(false);
   const [isShareOpen, setIsShareOpen] = useState(false);
 
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
@@ -315,14 +313,6 @@ export const ProfileScreen: React.FC = () => {
             onPress: () => setIsThemeOpen(true),
           })}
           {settingsRow({
-            icon: 'cloud-outline',
-            title: 'Комната и Google Sheets',
-            subtitle: currentParty.code
-              ? `Подключено · код ${currentParty.code}`
-              : 'Создать или подключить общую комнату',
-            onPress: () => setIsCloudOpen(true),
-          })}
-          {settingsRow({
             icon: 'qr-code-outline',
             title: 'Поделиться приложением',
             subtitle: 'QR-код и ссылка для быстрой установки',
@@ -357,7 +347,6 @@ export const ProfileScreen: React.FC = () => {
 
       <ProfileEditModal visible={isEditOpen} onClose={() => setIsEditOpen(false)} />
       <ThemeSelectorModal visible={isThemeOpen} onClose={() => setIsThemeOpen(false)} />
-      <CloudSyncModal visible={isCloudOpen} onClose={() => setIsCloudOpen(false)} />
       <ShareAppModal
         visible={isShareOpen}
         onClose={() => setIsShareOpen(false)}
