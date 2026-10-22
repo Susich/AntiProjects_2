@@ -350,8 +350,6 @@ export const ProfileScreen: React.FC = () => {
       <ShareAppModal
         visible={isShareOpen}
         onClose={() => setIsShareOpen(false)}
-        partyCode={currentParty.code}
-        partyTitle={currentParty.title}
       />
       <UpdateModal
         visible={isUpdateModalOpen}
