@@ -48,6 +48,12 @@ export const RoomQrModal: React.FC<RoomQrModalProps> = ({
     return `partysplit://join/${target}`;
   }, [partyCode, partyId]);
 
+  // Full friendly invitation text with party title, code and QR scan instructions
+  const inviteText = useMemo(() => {
+    const titlePart = partyTitle ? `«${partyTitle}»` : 'тусовку';
+    return `🎉 Приглашаю на ${titlePart} в PartySplit!\n🔑 Код комнаты: ${partyCode || '—'}\n\nОтсканируй QR-код камерой в приложении PartySplit или введи код вручную, чтобы подключиться! ✨`;
+  }, [partyTitle, partyCode]);
+
   const handleCopyCode = async () => {
     void triggerImpact();
     const ok = await copyToClipboard(partyCode);
@@ -115,23 +121,20 @@ export const RoomQrModal: React.FC<RoomQrModalProps> = ({
       const isSharingAvailable = await Sharing.isAvailableAsync();
 
       if (hasFile && isSharingAvailable) {
-        // Automatically copy the party code to clipboard so user can easily paste it
-        if (partyCode) {
-          await copyToClipboard(partyCode);
-          showToast(`Код ${partyCode} скопирован в буфер! Прикрепляем QR-код...`, {
-            type: 'success',
-            icon: 'copy-outline',
-          });
-        }
+        // Copy the complete invitation text to clipboard so user can instantly paste it with the QR photo
+        await copyToClipboard(inviteText);
+        showToast(`Приглашение и код ${partyCode} скопированы! Прикрепляем QR...`, {
+          type: 'success',
+          icon: 'copy-outline',
+        });
         await Sharing.shareAsync(fileUri, {
           mimeType: 'image/png',
-          dialogTitle: `Код комнаты: ${partyCode || ''}${partyTitle ? ` («${partyTitle}»)` : ''}`,
+          dialogTitle: `🎉 Приглашаю на тусовку «${partyTitle || 'PartySplit'}» (Код: ${partyCode})`,
           UTI: 'public.png',
         });
       } else {
         // Fallback for Web or environments without native file sharing
-        const message = `Присоединяйся к тусовке «${partyTitle}» в PartySplit!\nКод комнаты: ${partyCode}`;
-        await Share.share({ message });
+        await Share.share({ message: inviteText });
       }
     } catch {
       showToast('Не удалось поделиться QR-кодом', { type: 'error' });
@@ -211,6 +214,18 @@ export const RoomQrModal: React.FC<RoomQrModalProps> = ({
             <Text style={styles.codeBlockValue} selectable>
               {partyCode || '—'}
             </Text>
+
+            {/* Invitation Preview Card */}
+            <View style={styles.invitePreviewCard}>
+              <View style={styles.inviteHeader}>
+                <Ionicons name="sparkles" size={13} color={theme.colors.neonCyan} />
+                <Text style={styles.inviteHeaderTitle}>Приглашение на тусовку</Text>
+              </View>
+              <Text style={styles.invitePreviewBody}>
+                🎉 Приглашаю на {partyTitle ? `«${partyTitle}»` : 'тусовку'} в PartySplit! Код:{' '}
+                <Text style={styles.inviteCodeBold}>{partyCode}</Text>
+              </Text>
+            </View>
 
             <View style={styles.actionsRow}>
               <Button
@@ -366,7 +381,40 @@ function createStyles(theme: ThemeTokens) {
       letterSpacing: 4,
       color: theme.colors.neonCyan,
       fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+      marginBottom: 12,
+    },
+    invitePreviewCard: {
+      width: '100%',
+      backgroundColor: theme.colors.surface,
+      borderRadius: 14,
+      borderWidth: 1,
+      borderColor: `${theme.colors.neonCyan}30`,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
       marginBottom: 16,
+    },
+    inviteHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      marginBottom: 4,
+    },
+    inviteHeaderTitle: {
+      fontSize: 11,
+      fontWeight: '800',
+      letterSpacing: 0.6,
+      color: theme.colors.neonCyan,
+      textTransform: 'uppercase',
+    },
+    invitePreviewBody: {
+      fontSize: 12.5,
+      fontWeight: '600',
+      lineHeight: 17,
+      color: theme.colors.textSecondary,
+    },
+    inviteCodeBold: {
+      color: theme.colors.neonCyan,
+      fontWeight: '800',
     },
     actionsRow: {
       flexDirection: 'row',
