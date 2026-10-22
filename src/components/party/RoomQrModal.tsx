@@ -17,6 +17,9 @@ import { copyToClipboard } from '../../utils/clipboard';
 import { triggerImpact } from '../../utils/haptics';
 import { useToast } from '../common/Toast';
 
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
+
 interface RoomQrModalProps {
   visible: boolean;
   onClose: () => void;
@@ -36,6 +39,8 @@ export const RoomQrModal: React.FC<RoomQrModalProps> = ({
   const styles = useMemo(() => createStyles(theme), [theme]);
   const { showToast } = useToast();
   const [copied, setCopied] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const svgRef = React.useRef<any>(null);
 
   // Universal deep-link payload and fallback code
   const qrPayload = useMemo(() => {
@@ -55,13 +60,83 @@ export const RoomQrModal: React.FC<RoomQrModalProps> = ({
     }
   };
 
+  const getQrBase64 = (): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      if (svgRef.current && typeof svgRef.current.toDataURL === 'function') {
+        try {
+          svgRef.current.toDataURL((data: string) => {
+            if (data && typeof data === 'string' && data.length > 20) {
+              resolve(data);
+            } else {
+              reject(new Error('Invalid base64 from SVG'));
+            }
+          });
+          setTimeout(() => reject(new Error('toDataURL timeout')), 900);
+          return;
+        } catch (err) {
+          reject(err);
+        }
+      } else {
+        reject(new Error('svgRef not ready'));
+      }
+    });
+  };
+
   const handleShare = async () => {
+    if (sharing) return;
+    setSharing(true);
+    void triggerImpact();
+
     try {
-      void triggerImpact();
-      const message = `Присоединяйся к тусовке «${partyTitle}» в PartySplit!\nКод комнаты: ${partyCode}\nИли отсканируй QR-код: ${qrPayload}`;
-      await Share.share({ message });
+      const cleanCode = partyCode || 'party';
+      const fileUri = `${FileSystem.cacheDirectory}PartySplit_QR_${cleanCode}.png`;
+
+      let hasFile = false;
+      try {
+        const base64Data = await getQrBase64();
+        await FileSystem.writeAsStringAsync(fileUri, base64Data, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        hasFile = true;
+      } catch {
+        // Fallback: download generated QR image via reliable public QR API
+        try {
+          const encodedPayload = encodeURIComponent(qrPayload);
+          const fallbackUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodedPayload}&margin=16&bgcolor=FFFFFF&color=0B0E14`;
+          const dlResult = await FileSystem.downloadAsync(fallbackUrl, fileUri);
+          if (dlResult.status === 200) {
+            hasFile = true;
+          }
+        } catch {
+          hasFile = false;
+        }
+      }
+
+      const isSharingAvailable = await Sharing.isAvailableAsync();
+
+      if (hasFile && isSharingAvailable) {
+        // Automatically copy the party code to clipboard so user can easily paste it
+        if (partyCode) {
+          await copyToClipboard(partyCode);
+          showToast(`Код ${partyCode} скопирован в буфер! Прикрепляем QR-код...`, {
+            type: 'success',
+            icon: 'copy-outline',
+          });
+        }
+        await Sharing.shareAsync(fileUri, {
+          mimeType: 'image/png',
+          dialogTitle: `Код комнаты: ${partyCode || ''}${partyTitle ? ` («${partyTitle}»)` : ''}`,
+          UTI: 'public.png',
+        });
+      } else {
+        // Fallback for Web or environments without native file sharing
+        const message = `Присоединяйся к тусовке «${partyTitle}» в PartySplit!\nКод комнаты: ${partyCode}`;
+        await Share.share({ message });
+      }
     } catch {
-      // Ignored
+      showToast('Не удалось поделиться QR-кодом', { type: 'error' });
+    } finally {
+      setSharing(false);
     }
   };
 
@@ -106,6 +181,9 @@ export const RoomQrModal: React.FC<RoomQrModalProps> = ({
             <View style={styles.qrWrapper}>
               {partyCode ? (
                 <QRCode
+                  getRef={(ref) => {
+                    svgRef.current = ref;
+                  }}
                   value={qrPayload}
                   size={210}
                   color="#0B0E14"
@@ -113,6 +191,7 @@ export const RoomQrModal: React.FC<RoomQrModalProps> = ({
                   logoSize={34}
                   logoMargin={4}
                   logoBorderRadius={10}
+                  quietZone={14}
                 />
               ) : (
                 <View style={styles.qrPlaceholder}>
@@ -143,11 +222,13 @@ export const RoomQrModal: React.FC<RoomQrModalProps> = ({
                 style={copied ? { ...styles.actionBtn, ...styles.actionBtnCopied } : styles.actionBtn}
               />
               <Button
-                title="Поделиться"
+                title={sharing ? 'Подготовка...' : 'Поделиться'}
                 icon="share-social-outline"
                 variant="primary"
                 size="md"
                 onPress={handleShare}
+                loading={sharing}
+                disabled={sharing}
                 style={styles.actionBtn}
               />
             </View>

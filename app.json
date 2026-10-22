@@ -69,7 +69,8 @@
           "cameraPermission": "Камера используется для сканирования QR-кода комнаты."
         }
       ],
-      "expo-status-bar"
+      "expo-status-bar",
+      "expo-sharing"
     ]
   }
 }
