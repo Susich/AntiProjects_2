@@ -121,31 +121,6 @@ export const Header: React.FC = () => {
             )}
           </TouchableOpacity>
 
-          {/* Cloud Sync Button */}
-          <TouchableOpacity
-            activeOpacity={0.75}
-            onPress={() => setIsCloudModalOpen(true)}
-            style={[
-              styles.iconBtn,
-              currentParty.code ? styles.iconBtnConnected : null,
-            ]}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            accessibilityRole="button"
-            accessibilityLabel="Синхронизация комнаты"
-          >
-            <Ionicons
-              name={currentParty.code ? 'cloud-done-outline' : 'cloud-outline'}
-              size={18}
-              color={
-                currentParty.code
-                  ? theme.colors.neonCyan
-                  : theme.colors.textSecondary
-              }
-            />
-            {currentParty.code && (
-              <View style={styles.activeCloudDot} />
-            )}
-          </TouchableOpacity>
 
           {/* Reset Party Button */}
           <TouchableOpacity
@@ -370,18 +345,6 @@ function createStyles(theme: ThemeTokens) {
       alignItems: 'center',
       justifyContent: 'center',
       position: 'relative',
-    },
-    iconBtnConnected: {
-      borderColor: theme.colors.neonCyan,
-    },
-    activeCloudDot: {
-      position: 'absolute',
-      top: 5,
-      right: 5,
-      width: 6,
-      height: 6,
-      borderRadius: 3,
-      backgroundColor: theme.colors.neonCyan,
     },
     unreadBadge: {
       position: 'absolute',

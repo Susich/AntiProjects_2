@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -19,12 +19,8 @@ import { usePartyStore } from '../../store/usePartyStore';
 import { ThemeTokens, useTheme } from '../../context/ThemeContext';
 import {
   createPartyInCloud,
-  DEFAULT_GOOGLE_SCRIPT_URL,
-  getGoogleScriptUrl,
   joinPartyInCloud,
   PartyApiResponse,
-  setGoogleScriptUrl,
-  testGoogleScriptConnection,
 } from '../../api/googleSheets';
 import { mapCloudExpenses, mapCloudParticipants, mapCloudShoppingList } from '../../utils/cloudSync';
 import { copyToClipboard } from '../../utils/clipboard';
@@ -38,7 +34,7 @@ import { RoomQrModal } from './RoomQrModal';
 import { QrScannerModal } from './QrScannerModal';
 import { sharePartyInvite } from '../../utils/partyInvite';
 
-type CloudTab = 'room' | 'create' | 'join' | 'settings';
+type CloudTab = 'room' | 'create' | 'join';
 type BankAction = 'create' | 'join';
 
 interface CloudSyncModalProps {
@@ -50,7 +46,6 @@ const TABS: { id: CloudTab; label: string; icon: keyof typeof Ionicons.glyphMap 
   { id: 'room', label: 'Комната', icon: 'people-outline' },
   { id: 'create', label: 'Создать', icon: 'add-circle-outline' },
   { id: 'join', label: 'Войти', icon: 'enter-outline' },
-  { id: 'settings', label: 'Настройки', icon: 'settings-outline' },
 ];
 
 export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({ visible, onClose }) => (
@@ -89,26 +84,14 @@ const CloudSyncContent: React.FC<{
       : currentParty.title
   );
   const [joinCode, setJoinCode] = useState('');
-  const [scriptUrl, setScriptUrl] = useState(DEFAULT_GOOGLE_SCRIPT_URL);
   const [bankStep, setBankStep] = useState<BankAction | null>(null);
   const [selectedBank, setSelectedBank] = useState(session?.user.bank || 'Сбербанк');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [testing, setTesting] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    void getGoogleScriptUrl().then((url) => {
-      if (active) setScriptUrl(url);
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
 
   const auth = session
     ? { userId: session.user.id, token: session.token }
@@ -281,26 +264,6 @@ const CloudSyncContent: React.FC<{
         },
       ]
     );
-  };
-
-  const handleTestConnection = async () => {
-    setTesting(true);
-    const result = await testGoogleScriptConnection(scriptUrl);
-    setTesting(false);
-    showToast(result.message, { type: result.success ? 'success' : 'error', duration: 5000 });
-  };
-
-  const handleSaveUrl = async () => {
-    await setGoogleScriptUrl(scriptUrl.trim());
-    const resolved = await getGoogleScriptUrl();
-    setScriptUrl(resolved);
-    showToast('URL Google Apps Script сохранён', { type: 'success' });
-  };
-
-  const handleResetUrl = async () => {
-    await setGoogleScriptUrl('');
-    setScriptUrl(DEFAULT_GOOGLE_SCRIPT_URL);
-    showToast('Восстановлен стандартный URL', { type: 'info' });
   };
 
   const renderErrorBox = (retryFn?: () => void) => {
@@ -631,58 +594,6 @@ const CloudSyncContent: React.FC<{
     </View>
   );
 
-  const renderSettings = () => (
-    <View style={styles.form}>
-      <Text style={styles.formTitle}>Google Sheets / Apps Script</Text>
-      <Text style={styles.formHint}>
-        Приложение работает с вашей таблицей через Apps Script Web App. После обновления
-        backend/Code.gs обязательно создайте новую версию развёртывания — URL при этом не
-        меняется.
-      </Text>
-
-      <Input
-        label="URL веб-приложения"
-        placeholder="https://script.google.com/macros/s/.../exec"
-        leftIcon="link-outline"
-        value={scriptUrl}
-        onChangeText={setScriptUrl}
-        autoCapitalize="none"
-        autoCorrect={false}
-        multiline
-        inputStyle={{ minHeight: 72, textAlignVertical: 'top' }}
-      />
-
-      <View style={styles.settingsActions}>
-        <Button
-          title="Проверить"
-          icon="pulse-outline"
-          variant="outline"
-          onPress={handleTestConnection}
-          loading={testing}
-          disabled={testing}
-          style={styles.settingsButton}
-        />
-        <Button
-          title="Сохранить URL"
-          icon="save-outline"
-          onPress={handleSaveUrl}
-          style={styles.settingsButton}
-        />
-      </View>
-      <TouchableOpacity onPress={handleResetUrl} style={styles.resetUrlLink}>
-        <Text style={styles.resetUrlText}>Восстановить стандартный URL</Text>
-      </TouchableOpacity>
-
-      <View style={styles.versionHint}>
-        <Ionicons name="information-circle-outline" size={17} color={theme.colors.info} />
-        <Text style={styles.versionHintText}>
-          Проверка подключения требует API версии 2: авторизация, статусы оплат и состав
-          комнаты.
-        </Text>
-      </View>
-    </View>
-  );
-
   return (
     <KeyboardAvoidingView
       style={styles.keyboard}
@@ -777,7 +688,6 @@ const CloudSyncContent: React.FC<{
             {activeTab === 'room' && renderRoom()}
             {activeTab === 'create' && renderCreate()}
             {activeTab === 'join' && renderJoin()}
-            {activeTab === 'settings' && renderSettings()}
           </ScrollView>
         </>
       )}
@@ -1225,37 +1135,6 @@ function createStyles(theme: ThemeTokens) {
     roomActions: {
       gap: theme.spacing.sm,
       marginTop: theme.spacing.sm,
-    },
-    settingsActions: {
-      flexDirection: 'row',
-      gap: theme.spacing.sm,
-    },
-    settingsButton: {
-      flex: 1,
-    },
-    resetUrlLink: {
-      alignSelf: 'center',
-      paddingVertical: 6,
-    },
-    resetUrlText: {
-      color: theme.colors.info,
-      fontSize: 12,
-      fontWeight: '600',
-    },
-    versionHint: {
-      flexDirection: 'row',
-      alignItems: 'flex-start',
-      gap: 8,
-      marginTop: theme.spacing.sm,
-      padding: theme.spacing.md,
-      backgroundColor: `${theme.colors.info}0D`,
-      borderRadius: theme.borderRadius.md,
-    },
-    versionHintText: {
-      flex: 1,
-      color: theme.colors.textSecondary,
-      fontSize: 11,
-      lineHeight: 16,
     },
     busyOverlay: {
       position: 'absolute',
