@@ -2,7 +2,6 @@ import React, { useMemo, useState } from 'react';
 import {
   Platform,
   ScrollView,
-  Share,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -16,9 +15,6 @@ import { Button } from '../common/Button';
 import { copyToClipboard } from '../../utils/clipboard';
 import { triggerImpact } from '../../utils/haptics';
 import { useToast } from '../common/Toast';
-
-import * as FileSystem from 'expo-file-system/legacy';
-import * as Sharing from 'expo-sharing';
 
 interface RoomQrModalProps {
   visible: boolean;
@@ -39,20 +35,12 @@ export const RoomQrModal: React.FC<RoomQrModalProps> = ({
   const styles = useMemo(() => createStyles(theme), [theme]);
   const { showToast } = useToast();
   const [copied, setCopied] = useState(false);
-  const [sharing, setSharing] = useState(false);
-  const svgRef = React.useRef<any>(null);
 
-  // Universal deep-link payload and fallback code
+  // Universal deep-link payload
   const qrPayload = useMemo(() => {
     const target = partyCode || partyId || '';
     return `partysplit://join/${target}`;
   }, [partyCode, partyId]);
-
-  // Full friendly invitation text with party title, code and QR scan instructions
-  const inviteText = useMemo(() => {
-    const titlePart = partyTitle ? `«${partyTitle}»` : 'тусовку';
-    return `🎉 Приглашаю на ${titlePart} в PartySplit!\n🔑 Код комнаты: ${partyCode || '—'}\n\nОтсканируй QR-код камерой в приложении PartySplit или введи код вручную, чтобы подключиться! ✨`;
-  }, [partyTitle, partyCode]);
 
   const handleCopyCode = async () => {
     void triggerImpact();
@@ -63,83 +51,6 @@ export const RoomQrModal: React.FC<RoomQrModalProps> = ({
       setTimeout(() => setCopied(false), 2000);
     } else {
       showToast('Не удалось скопировать код', { type: 'error' });
-    }
-  };
-
-  const getQrBase64 = (): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      if (svgRef.current && typeof svgRef.current.toDataURL === 'function') {
-        try {
-          svgRef.current.toDataURL((data: string) => {
-            if (data && typeof data === 'string' && data.length > 20) {
-              resolve(data);
-            } else {
-              reject(new Error('Invalid base64 from SVG'));
-            }
-          });
-          setTimeout(() => reject(new Error('toDataURL timeout')), 900);
-          return;
-        } catch (err) {
-          reject(err);
-        }
-      } else {
-        reject(new Error('svgRef not ready'));
-      }
-    });
-  };
-
-  const handleShare = async () => {
-    if (sharing) return;
-    setSharing(true);
-    void triggerImpact();
-
-    try {
-      const cleanCode = partyCode || 'party';
-      const fileUri = `${FileSystem.cacheDirectory}PartySplit_QR_${cleanCode}.png`;
-
-      let hasFile = false;
-      try {
-        const base64Data = await getQrBase64();
-        await FileSystem.writeAsStringAsync(fileUri, base64Data, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        hasFile = true;
-      } catch {
-        // Fallback: download generated QR image via reliable public QR API
-        try {
-          const encodedPayload = encodeURIComponent(qrPayload);
-          const fallbackUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodedPayload}&margin=16&bgcolor=FFFFFF&color=0B0E14`;
-          const dlResult = await FileSystem.downloadAsync(fallbackUrl, fileUri);
-          if (dlResult.status === 200) {
-            hasFile = true;
-          }
-        } catch {
-          hasFile = false;
-        }
-      }
-
-      const isSharingAvailable = await Sharing.isAvailableAsync();
-
-      if (hasFile && isSharingAvailable) {
-        // Copy the complete invitation text to clipboard so user can instantly paste it with the QR photo
-        await copyToClipboard(inviteText);
-        showToast(`Приглашение и код ${partyCode} скопированы! Прикрепляем QR...`, {
-          type: 'success',
-          icon: 'copy-outline',
-        });
-        await Sharing.shareAsync(fileUri, {
-          mimeType: 'image/png',
-          dialogTitle: `🎉 Приглашаю на тусовку «${partyTitle || 'PartySplit'}» (Код: ${partyCode})`,
-          UTI: 'public.png',
-        });
-      } else {
-        // Fallback for Web or environments without native file sharing
-        await Share.share({ message: inviteText });
-      }
-    } catch {
-      showToast('Не удалось поделиться QR-кодом', { type: 'error' });
-    } finally {
-      setSharing(false);
     }
   };
 
@@ -184,14 +95,11 @@ export const RoomQrModal: React.FC<RoomQrModalProps> = ({
             <View style={styles.qrWrapper}>
               {partyCode ? (
                 <QRCode
-                  getRef={(ref) => {
-                    svgRef.current = ref;
-                  }}
                   value={qrPayload}
-                  size={210}
+                  size={220}
                   color="#0B0E14"
                   backgroundColor="#FFFFFF"
-                  logoSize={34}
+                  logoSize={36}
                   logoMargin={4}
                   logoBorderRadius={10}
                   quietZone={14}
@@ -215,38 +123,14 @@ export const RoomQrModal: React.FC<RoomQrModalProps> = ({
               {partyCode || '—'}
             </Text>
 
-            {/* Invitation Preview Card */}
-            <View style={styles.invitePreviewCard}>
-              <View style={styles.inviteHeader}>
-                <Ionicons name="sparkles" size={13} color={theme.colors.neonCyan} />
-                <Text style={styles.inviteHeaderTitle}>Приглашение на тусовку</Text>
-              </View>
-              <Text style={styles.invitePreviewBody}>
-                🎉 Приглашаю на {partyTitle ? `«${partyTitle}»` : 'тусовку'} в PartySplit! Код:{' '}
-                <Text style={styles.inviteCodeBold}>{partyCode}</Text>
-              </Text>
-            </View>
-
-            <View style={styles.actionsRow}>
-              <Button
-                title={copied ? 'Скопировано!' : 'Скопировать код'}
-                icon={copied ? 'checkmark-circle' : 'copy-outline'}
-                variant="outline"
-                size="md"
-                onPress={handleCopyCode}
-                style={copied ? { ...styles.actionBtn, ...styles.actionBtnCopied } : styles.actionBtn}
-              />
-              <Button
-                title={sharing ? 'Подготовка...' : 'Поделиться'}
-                icon="share-social-outline"
-                variant="primary"
-                size="md"
-                onPress={handleShare}
-                loading={sharing}
-                disabled={sharing}
-                style={styles.actionBtn}
-              />
-            </View>
+            <Button
+              title={copied ? 'Скопировано!' : 'Скопировать код'}
+              icon={copied ? 'checkmark-circle' : 'copy-outline'}
+              variant="primary"
+              size="lg"
+              onPress={handleCopyCode}
+              style={copied ? { ...styles.actionBtn, ...styles.actionBtnCopied } : styles.actionBtn}
+            />
           </View>
         </View>
       </ScrollView>
@@ -381,48 +265,10 @@ function createStyles(theme: ThemeTokens) {
       letterSpacing: 4,
       color: theme.colors.neonCyan,
       fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-      marginBottom: 12,
-    },
-    invitePreviewCard: {
-      width: '100%',
-      backgroundColor: theme.colors.surface,
-      borderRadius: 14,
-      borderWidth: 1,
-      borderColor: `${theme.colors.neonCyan}30`,
-      paddingHorizontal: 14,
-      paddingVertical: 10,
       marginBottom: 16,
     },
-    inviteHeader: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 6,
-      marginBottom: 4,
-    },
-    inviteHeaderTitle: {
-      fontSize: 11,
-      fontWeight: '800',
-      letterSpacing: 0.6,
-      color: theme.colors.neonCyan,
-      textTransform: 'uppercase',
-    },
-    invitePreviewBody: {
-      fontSize: 12.5,
-      fontWeight: '600',
-      lineHeight: 17,
-      color: theme.colors.textSecondary,
-    },
-    inviteCodeBold: {
-      color: theme.colors.neonCyan,
-      fontWeight: '800',
-    },
-    actionsRow: {
-      flexDirection: 'row',
-      gap: 12,
-      width: '100%',
-    },
     actionBtn: {
-      flex: 1,
+      width: '100%',
     },
     actionBtnCopied: {
       borderColor: theme.colors.success,

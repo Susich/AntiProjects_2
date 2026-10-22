@@ -36,6 +36,7 @@ import { useToast } from '../common/Toast';
 import { isNetworkOnline } from '../../services/networkService';
 import { RoomQrModal } from './RoomQrModal';
 import { QrScannerModal } from './QrScannerModal';
+import { sharePartyInvite } from '../../utils/partyInvite';
 
 type CloudTab = 'room' | 'create' | 'join' | 'settings';
 type BankAction = 'create' | 'join';
@@ -95,6 +96,7 @@ const CloudSyncContent: React.FC<{
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
+  const [isSharing, setIsSharing] = useState(false);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
 
@@ -391,6 +393,26 @@ const CloudSyncContent: React.FC<{
     </View>
   );
 
+  const handleShareParty = async () => {
+    if (isSharing || !currentParty.code) return;
+    setIsSharing(true);
+    try {
+      showToast(`Приглашение и код ${currentParty.code} скопированы! Прикрепляем QR-код...`, {
+        type: 'success',
+        icon: 'copy-outline',
+      });
+      await sharePartyInvite({
+        partyCode: currentParty.code,
+        partyTitle: currentParty.title,
+        partyId: currentParty.id,
+      });
+    } catch {
+      showToast('Не удалось поделиться', { type: 'error' });
+    } finally {
+      setIsSharing(false);
+    }
+  };
+
   const renderRoom = () => {
     if (!currentParty.code) {
       return (
@@ -435,7 +457,7 @@ const CloudSyncContent: React.FC<{
             >
               <Ionicons
                 name={copiedCode ? 'checkmark-circle' : 'copy-outline'}
-                size={16}
+                size={15}
                 color={copiedCode ? theme.colors.success : theme.colors.primary}
               />
               <Text
@@ -453,8 +475,20 @@ const CloudSyncContent: React.FC<{
               onPress={() => setIsQrModalOpen(true)}
               accessibilityRole="button"
             >
-              <Ionicons name="qr-code-outline" size={16} color={theme.colors.neonCyan} />
+              <Ionicons name="qr-code-outline" size={15} color={theme.colors.neonCyan} />
               <Text style={styles.qrCodeButtonText}>QR-код</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.shareButton}
+              onPress={handleShareParty}
+              disabled={isSharing}
+              accessibilityRole="button"
+            >
+              <Ionicons name="share-social-outline" size={15} color={theme.colors.primary} />
+              <Text style={styles.shareButtonText}>
+                {isSharing ? 'Загрузка...' : 'Поделиться'}
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1054,14 +1088,17 @@ function createStyles(theme: ThemeTokens) {
     },
     codeButtonsRow: {
       flexDirection: 'row',
-      gap: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
       marginTop: 4,
+      flexWrap: 'wrap',
     },
     copyCodeButton: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 6,
-      paddingHorizontal: 14,
+      gap: 5,
+      paddingHorizontal: 12,
       paddingVertical: 8,
       borderRadius: theme.borderRadius.full,
       backgroundColor: `${theme.colors.primary}12`,
@@ -1080,8 +1117,8 @@ function createStyles(theme: ThemeTokens) {
     qrCodeButton: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 6,
-      paddingHorizontal: 14,
+      gap: 5,
+      paddingHorizontal: 12,
       paddingVertical: 8,
       borderRadius: theme.borderRadius.full,
       backgroundColor: `${theme.colors.neonCyan}12`,
@@ -1090,6 +1127,22 @@ function createStyles(theme: ThemeTokens) {
     },
     qrCodeButtonText: {
       color: theme.colors.neonCyan,
+      fontSize: 12,
+      fontWeight: '700',
+    },
+    shareButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: theme.borderRadius.full,
+      backgroundColor: `${theme.colors.primary}18`,
+      borderWidth: 1,
+      borderColor: `${theme.colors.primary}50`,
+    },
+    shareButtonText: {
+      color: theme.colors.primary,
       fontSize: 12,
       fontWeight: '700',
     },
