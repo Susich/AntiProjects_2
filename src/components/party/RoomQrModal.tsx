@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   Platform,
+  ScrollView,
   Share,
   StyleSheet,
   Text,
@@ -65,93 +66,110 @@ export const RoomQrModal: React.FC<RoomQrModalProps> = ({
   };
 
   return (
-    <BottomSheetModal visible={visible} onClose={onClose} height="85%">
-      <View style={styles.container}>
-        {/* Header */}
-        <View style={styles.header}>
-          <View style={styles.headerLeft}>
-            <View style={styles.headerIcon}>
-              <Ionicons name="qr-code" size={20} color={theme.colors.neonCyan} />
-            </View>
-            <View style={styles.headerTextWrap}>
-              <Text style={styles.headerTitle}>QR-код комнаты</Text>
-              <Text style={styles.headerSubtitle} numberOfLines={1}>
-                {partyTitle || 'Тусовка'}
-              </Text>
-            </View>
-          </View>
-          <TouchableOpacity
-            style={styles.closeBtn}
-            onPress={onClose}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Ionicons name="close" size={20} color={theme.colors.textMuted} />
-          </TouchableOpacity>
-        </View>
-
-        {/* QR Code Container */}
-        <View style={styles.qrCard}>
-          <View style={styles.qrWrapper}>
-            {partyCode ? (
-              <QRCode
-                value={qrPayload}
-                size={220}
-                color="#0B0E14"
-                backgroundColor="#FFFFFF"
-                logoSize={36}
-                logoMargin={4}
-                logoBorderRadius={10}
-              />
-            ) : (
-              <View style={styles.qrPlaceholder}>
-                <Ionicons name="alert-circle-outline" size={40} color={theme.colors.warning} />
-                <Text style={styles.qrPlaceholderText}>Код комнаты отсутствует</Text>
+    <BottomSheetModal
+      visible={visible}
+      onClose={onClose}
+      maxHeight="96%"
+      height="92%"
+    >
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+        style={styles.scrollView}
+        bounces={false}
+      >
+        <View style={styles.container}>
+          {/* Header */}
+          <View style={styles.header}>
+            <View style={styles.headerLeft}>
+              <View style={styles.headerIcon}>
+                <Ionicons name="qr-code" size={20} color={theme.colors.neonCyan} />
               </View>
-            )}
+              <View style={styles.headerTextWrap}>
+                <Text style={styles.headerTitle}>QR-код комнаты</Text>
+                <Text style={styles.headerSubtitle} numberOfLines={1}>
+                  {partyTitle || 'Тусовка'}
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              style={styles.closeBtn}
+              onPress={onClose}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Ionicons name="close" size={20} color={theme.colors.textMuted} />
+            </TouchableOpacity>
           </View>
-          <Text style={styles.qrHint}>
-            Наведите камеру в приложении PartySplit для мгновенного входа
-          </Text>
-        </View>
 
-        {/* Text Code Block */}
-        <View style={styles.codeBlock}>
-          <Text style={styles.codeBlockLabel}>КОД ДЛЯ ВХОДА ВРУЧНУЮ</Text>
-          <Text style={styles.codeBlockValue} selectable>
-            {partyCode || '—'}
-          </Text>
+          {/* QR Code Container */}
+          <View style={styles.qrCard}>
+            <View style={styles.qrWrapper}>
+              {partyCode ? (
+                <QRCode
+                  value={qrPayload}
+                  size={210}
+                  color="#0B0E14"
+                  backgroundColor="#FFFFFF"
+                  logoSize={34}
+                  logoMargin={4}
+                  logoBorderRadius={10}
+                />
+              ) : (
+                <View style={styles.qrPlaceholder}>
+                  <Ionicons name="alert-circle-outline" size={40} color={theme.colors.warning} />
+                  <Text style={styles.qrPlaceholderText}>Код комнаты отсутствует</Text>
+                </View>
+              )}
+            </View>
+            <Text style={styles.qrHint}>
+              Наведите камеру в приложении PartySplit для мгновенного входа
+            </Text>
+          </View>
 
-          <View style={styles.actionsRow}>
-            <Button
-              title={copied ? 'Скопировано!' : 'Скопировать код'}
-              icon={copied ? 'checkmark-circle' : 'copy-outline'}
-              variant="outline"
-              size="md"
-              onPress={handleCopyCode}
-              style={copied ? { ...styles.actionBtn, ...styles.actionBtnCopied } : styles.actionBtn}
-            />
-            <Button
-              title="Поделиться"
-              icon="share-social-outline"
-              variant="primary"
-              size="md"
-              onPress={handleShare}
-              style={styles.actionBtn}
-            />
+          {/* Text Code Block */}
+          <View style={styles.codeBlock}>
+            <Text style={styles.codeBlockLabel}>КОД ДЛЯ ВХОДА ВРУЧНУЮ</Text>
+            <Text style={styles.codeBlockValue} selectable>
+              {partyCode || '—'}
+            </Text>
+
+            <View style={styles.actionsRow}>
+              <Button
+                title={copied ? 'Скопировано!' : 'Скопировать код'}
+                icon={copied ? 'checkmark-circle' : 'copy-outline'}
+                variant="outline"
+                size="md"
+                onPress={handleCopyCode}
+                style={copied ? { ...styles.actionBtn, ...styles.actionBtnCopied } : styles.actionBtn}
+              />
+              <Button
+                title="Поделиться"
+                icon="share-social-outline"
+                variant="primary"
+                size="md"
+                onPress={handleShare}
+                style={styles.actionBtn}
+              />
+            </View>
           </View>
         </View>
-      </View>
+      </ScrollView>
     </BottomSheetModal>
   );
 };
 
 function createStyles(theme: ThemeTokens) {
   return StyleSheet.create({
-    container: {
+    scrollView: {
       flex: 1,
-      paddingHorizontal: 20,
-      paddingTop: 4,
+      width: '100%',
+    },
+    scrollContent: {
       paddingBottom: 24,
+    },
+    container: {
+      paddingHorizontal: 20,
+      paddingTop: 2,
       alignItems: 'center',
     },
     header: {

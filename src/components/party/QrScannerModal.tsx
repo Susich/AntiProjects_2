@@ -275,7 +275,7 @@ function createStyles(theme: ThemeTokens) {
       bottom: 0,
     },
     maskTop: {
-      flex: 1,
+      flex: 0.7,
       backgroundColor: 'rgba(0, 0, 0, 0.65)',
     },
     maskMiddle: {
@@ -326,7 +326,7 @@ function createStyles(theme: ThemeTokens) {
       borderBottomRightRadius: 10,
     },
     maskBottom: {
-      flex: 1.2,
+      flex: 1.4,
       backgroundColor: 'rgba(0, 0, 0, 0.65)',
       alignItems: 'center',
       paddingTop: 32,

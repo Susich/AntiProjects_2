@@ -570,6 +570,7 @@ const CloudSyncContent: React.FC<{
             autoCapitalize="characters"
             autoCorrect={false}
             maxLength={36}
+            containerStyle={styles.joinInputContainer}
           />
         </View>
         <TouchableOpacity
@@ -1096,22 +1097,25 @@ function createStyles(theme: ThemeTokens) {
       flexDirection: 'row',
       alignItems: 'flex-end',
       gap: 10,
+      marginBottom: 16,
     },
     joinInputFlex: {
       flex: 1,
+    },
+    joinInputContainer: {
+      marginBottom: 0,
     },
     scanButton: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
       gap: 6,
-      height: 50,
+      height: 48,
       paddingHorizontal: 14,
       backgroundColor: `${theme.colors.neonCyan}16`,
-      borderWidth: 1,
+      borderWidth: 1.5,
       borderColor: `${theme.colors.neonCyan}45`,
       borderRadius: theme.borderRadius.md,
-      marginBottom: 0,
     },
     scanButtonText: {
       color: theme.colors.neonCyan,
