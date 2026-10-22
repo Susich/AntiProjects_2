@@ -21,7 +21,6 @@ import {
   PARTY_PRESETS,
 } from '../components/shopping/AddShoppingItemModal';
 import { ConvertShoppingModal } from '../components/shopping/ConvertShoppingModal';
-import { RoomQrModal } from '../components/party/RoomQrModal';
 import { formatRubles } from '../utils/currency';
 import { Button } from '../components/common/Button';
 import { useToast } from '../components/common/Toast';
@@ -50,7 +49,6 @@ export const PartyScreen: React.FC<PartyScreenProps> = ({ onNavigateToResults })
   const [editingShoppingItem, setEditingShoppingItem] = useState<ShoppingItem | null>(null);
   const [shoppingPreset, setShoppingPreset] = useState<(typeof PARTY_PRESETS)[0] | null>(null);
   const [convertingShoppingItem, setConvertingShoppingItem] = useState<ShoppingItem | null>(null);
-  const [isQrModalVisible, setIsQrModalVisible] = useState(false);
 
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -140,31 +138,6 @@ export const PartyScreen: React.FC<PartyScreenProps> = ({ onNavigateToResults })
           />
         }
       >
-        {/* Room Code & QR-code Header Bar */}
-        {currentParty.code ? (
-          <View style={styles.roomBar}>
-            <TouchableOpacity
-              style={styles.roomCodeChip}
-              onPress={() => setIsCloudModalVisible(true)}
-              activeOpacity={0.8}
-            >
-              <View style={styles.roomDot} />
-              <Text style={styles.roomCodeText}>Комната #{currentParty.code}</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.qrShareButton}
-              onPress={() => setIsQrModalVisible(true)}
-              activeOpacity={0.8}
-              accessibilityRole="button"
-              accessibilityLabel="Поделиться / QR-код"
-            >
-              <Ionicons name="qr-code-outline" size={15} color={theme.colors.neonCyan} />
-              <Text style={styles.qrShareButtonText}>Поделиться / QR</Text>
-            </TouchableOpacity>
-          </View>
-        ) : null}
-
         {/* Participants Section */}
         <ParticipantChips onOpenCloud={() => setIsCloudModalVisible(true)} />
 
@@ -357,15 +330,6 @@ export const PartyScreen: React.FC<PartyScreenProps> = ({ onNavigateToResults })
         visible={isCloudModalVisible}
         onClose={() => setIsCloudModalVisible(false)}
       />
-
-      {/* Room QR Modal */}
-      <RoomQrModal
-        visible={isQrModalVisible}
-        onClose={() => setIsQrModalVisible(false)}
-        partyCode={currentParty.code || ''}
-        partyTitle={currentParty.title}
-        partyId={currentParty.id}
-      />
     </View>
   );
 };
@@ -382,51 +346,6 @@ function createStyles(theme: ThemeTokens) {
     scrollContent: {
       padding: 16,
       paddingBottom: 40,
-    },
-    roomBar: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      backgroundColor: theme.colors.surface,
-      borderWidth: 1,
-      borderColor: theme.colors.surfaceBorder,
-      borderRadius: 14,
-      paddingHorizontal: 12,
-      paddingVertical: 8,
-      marginBottom: 12,
-    },
-    roomCodeChip: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 7,
-    },
-    roomDot: {
-      width: 8,
-      height: 8,
-      borderRadius: 4,
-      backgroundColor: theme.colors.success,
-    },
-    roomCodeText: {
-      fontSize: 13,
-      fontWeight: '800',
-      color: theme.colors.textPrimary,
-      letterSpacing: 0.8,
-    },
-    qrShareButton: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 5,
-      paddingHorizontal: 10,
-      paddingVertical: 5,
-      backgroundColor: `${theme.colors.neonCyan}16`,
-      borderRadius: 8,
-      borderWidth: 1,
-      borderColor: `${theme.colors.neonCyan}40`,
-    },
-    qrShareButtonText: {
-      fontSize: 12,
-      fontWeight: '700',
-      color: theme.colors.neonCyan,
     },
     tabSwitcher: {
       flexDirection: 'row',
