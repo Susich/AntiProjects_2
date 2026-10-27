@@ -201,7 +201,7 @@ https://api.github.com/repos/{owner}/{repo}/releases/latest
 
 ### Настройка репозитория
 
-Укажите реальные владельца и название репозитория в `src/config/github.ts`:
+По умолчанию уже настроен публичный репозиторий `Susich/AntiProjects_2` в `src/config/github.ts`:
 
 ```ts
 export const GITHUB_OWNER = 'Susich';
@@ -220,9 +220,9 @@ EXPO_PUBLIC_GITHUB_REPO=AntiProjects_2
 ### Публикация обновления
 
 1. Поднимите версию в `package.json`, `app.json` (`expo.version` и `android.versionCode`) и `src/config/version.ts`.
-2. Соберите APK через EAS (например, профиль `preview`/`production`).
-3. Создайте GitHub Release с тегом вида `v1.0.6` (без тега `latest` — GitHub сам считает последним самый новый стабильный релиз).
-4. Прикрепите к релизу `.apk`-файл. Приложение берёт первый asset с расширением `.apk`.
+2. Соберите APK через EAS: `npx eas-cli@latest build -p android --profile preview` (в профиле `preview` задан `buildType: apk`).
+3. Создайте GitHub Release с тегом вида `v1.0.6`. В репозитории есть workflow `.github/workflows/publish-apk.yml`: запустите его вручную, передав тег и ссылку на APK из EAS — он скачает файл и опубликует релиз.
+4. Если публикуете вручную, прикрепите к релизу `.apk`-файл. Приложение берёт первый asset с расширением `.apk`.
 5. Текст релиза (`body`) показывается в модальном окне «Что нового».
 
 Кнопка «Обновить» скачивает APK, сохраняет его в кэш приложения и открывает системный установщик Android. Если установленная версия не старше последней, показывается сообщение «У вас установлена последняя версия».
