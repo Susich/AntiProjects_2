@@ -14,7 +14,7 @@ import { isNetworkOnline } from '../services/networkService';
  *  - waits while optimistic writes are in the queue (to avoid overwriting
  *    local changes with an older snapshot);
  *  - backs off exponentially on network/server errors;
- *  - pauses in the background and refreshes immediately on foreground;
+ *  - pauses in the background and forces a fresh read on foreground;
  *  - uses the API read cache / in-flight deduplication.
  */
 const DEFAULT_INTERVAL_MS = 4000;
@@ -30,6 +30,7 @@ export function useCloudAutoSync(intervalMs: number = DEFAULT_INTERVAL_MS): void
     let active = true;
     let paused = false;
     let running = false;
+    let forceRequested = false;
     let nextDelay = intervalMs;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -40,20 +41,25 @@ export function useCloudAutoSync(intervalMs: number = DEFAULT_INTERVAL_MS): void
       }
     };
 
-    const schedule = (delay: number) => {
+    const schedule = (delay: number, force = false) => {
       if (!active || paused) return;
       clearTimer();
       timer = setTimeout(() => {
         timer = null;
-        void sync();
+        void sync(force);
       }, delay);
     };
 
-    const sync = async () => {
-      if (!active || paused || running) return;
+    const sync = async (force = false) => {
+      if (!active || paused) return;
+      if (running) {
+        // A forced foreground refresh arrived while a poll was in flight.
+        if (force) forceRequested = true;
+        return;
+      }
 
       if (!isNetworkOnline()) {
-        schedule(Math.max(intervalMs, 10000));
+        schedule(Math.max(intervalMs, 10000), force);
         return;
       }
 
@@ -63,14 +69,17 @@ export function useCloudAutoSync(intervalMs: number = DEFAULT_INTERVAL_MS): void
       // A poll during an optimistic write would fetch the pre-write sheet and
       // briefly revert the UI. Wait for the queue instead.
       if (hasPendingCloudWrites()) {
-        schedule(Math.min(intervalMs, 2500));
+        schedule(Math.min(intervalMs, 2500), force);
         return;
       }
 
       running = true;
       let success = false;
       try {
-        const result = await state.syncWithCloud({ background: true });
+        const result = await state.syncWithCloud({
+          background: true,
+          forceRefresh: force,
+        });
         // A stale snapshot means the network request failed; back off even
         // though the cached room remains visible.
         success = result.success && !result.stale;
@@ -83,18 +92,27 @@ export function useCloudAutoSync(intervalMs: number = DEFAULT_INTERVAL_MS): void
         nextDelay = success
           ? intervalMs
           : Math.min(Math.round(nextDelay * 1.8), MAX_INTERVAL_MS);
-        schedule(nextDelay + Math.floor(Math.random() * 600));
+
+        // Run a queued foreground refresh immediately instead of waiting out
+        // the normal interval.
+        const runForcedNext = forceRequested;
+        forceRequested = false;
+        schedule(
+          runForcedNext ? 0 : nextDelay + Math.floor(Math.random() * 600),
+          runForcedNext
+        );
       }
     };
 
-    // On mount: revalidate now. Cached data is already visible from hydrate().
-    schedule(0);
+    // On mount: force one network read. Cached data is already visible.
+    schedule(0, true);
 
     const subscription = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') {
         paused = false;
         nextDelay = intervalMs;
-        schedule(0);
+        // Return from background: bypass the read cache and refresh now.
+        schedule(0, true);
       } else {
         // App is in background: continue polling with a gentle 25s interval
         // so participants outside the app receive phone system notifications.

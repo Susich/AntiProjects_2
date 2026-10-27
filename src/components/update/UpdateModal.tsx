@@ -1,6 +1,7 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Linking,
   Platform,
   ScrollView,
   StyleSheet,
@@ -16,107 +17,152 @@ import { Card } from '../common/Card';
 import { useToast } from '../common/Toast';
 import {
   CURRENT_APP_VERSION,
+  LatestReleaseInfo,
+  checkForUpdate,
   downloadAndInstallApk,
-  markVersionAsInstalled,
   openUnknownAppSourcesPermission,
-  UpdateCheckResult,
 } from '../../services/updateService';
 
 interface UpdateModalProps {
   visible: boolean;
   onClose: () => void;
-  updateInfo: UpdateCheckResult | null;
-  onVersionUpdated?: (version: string) => void;
 }
 
-export const UpdateModal: React.FC<UpdateModalProps> = ({
-  visible,
-  onClose,
-  updateInfo,
-  onVersionUpdated,
-}) => {
+type CheckState = 'idle' | 'checking' | 'update' | 'latest' | 'error';
+
+function formatReleaseNotes(body: string): string {
+  return String(body || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/^#{1,6}\s*/gm, '')
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .trim();
+}
+
+function formatDate(value?: string): string {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString('ru-RU', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+}
+
+function formatSize(bytes: number): string {
+  if (!bytes || bytes <= 0) return '';
+  return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
+}
+
+/**
+ * Checks GitHub Releases (semver) and, when a newer version exists, downloads
+ * the attached APK and opens the Android package installer.
+ */
+export const UpdateModal: React.FC<UpdateModalProps> = ({ visible, onClose }) => {
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
   const { showToast } = useToast();
+
+  const [checkState, setCheckState] = useState<CheckState>('idle');
+  const [release, setRelease] = useState<LatestReleaseInfo | null>(null);
+  const [checkError, setCheckError] = useState<string | null>(null);
 
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [downloadedBytes, setDownloadedBytes] = useState(0);
   const [totalBytes, setTotalBytes] = useState(0);
   const [downloadError, setDownloadError] = useState<string | null>(null);
-  const [isReadyToInstall, setIsReadyToInstall] = useState(false);
-  const [manuallyConfirmed, setManuallyConfirmed] = useState(false);
 
-  const currentVersion = updateInfo?.currentVersion || CURRENT_APP_VERSION;
-  const targetVersion = updateInfo?.latestVersion || CURRENT_APP_VERSION;
-  const hasUpdate = !manuallyConfirmed && (updateInfo?.hasUpdate ?? false);
-  const releaseNotes =
-    updateInfo?.releaseNotes ||
-    '• Стабильная доставка системных уведомлений в Android 13+\n• Обновлённое отображение модальных окон и таб-бара\n• Быстрая синхронизация счетов через Google Диск';
-  const sizeMb = updateInfo?.fileSizeMb || 42;
+  const requestRef = useRef(0);
 
-  const handleStartUpdate = async () => {
-    if (!updateInfo?.apkUrl) {
-      showToast('Ссылка на обновление не найдена', { type: 'error' });
+  const runCheck = useCallback(async () => {
+    const requestId = ++requestRef.current;
+    setCheckState('checking');
+    setCheckError(null);
+    setDownloadError(null);
+    setRelease(null);
+    setDownloadProgress(0);
+    setDownloadedBytes(0);
+    setTotalBytes(0);
+
+    const result = await checkForUpdate();
+    if (requestId !== requestRef.current) return;
+
+    if (result.status === 'error') {
+      setCheckState('error');
+      setCheckError(result.error);
       return;
     }
+
+    setRelease(result.latest);
+    setCheckState(result.status);
+  }, []);
+
+  useEffect(() => {
+    if (!visible) return;
+
+    // Defer the state-changing check so opening the sheet stays a pure render
+    // pass (React lint rule: no synchronous setState inside an effect).
+    const timer = setTimeout(() => {
+      void runCheck();
+    }, 0);
+
+    return () => {
+      clearTimeout(timer);
+      // Ignore a response that arrives after the modal was closed.
+      requestRef.current += 1;
+    };
+  }, [visible, runCheck]);
+
+  const handleDownload = async () => {
+    if (!release) return;
 
     setDownloadError(null);
     setIsDownloading(true);
     setDownloadProgress(0);
+    setDownloadedBytes(0);
+    setTotalBytes(release.apkSize > 0 ? release.apkSize : 0);
 
     try {
       const res = await downloadAndInstallApk(
-        updateInfo.apkUrl,
+        release.apkUrl,
         (progress, written, total) => {
           setDownloadProgress(progress);
           setDownloadedBytes(written);
           setTotalBytes(total);
         },
-        targetVersion
+        release.apkName
       );
 
       if (res.success) {
-        setIsReadyToInstall(true);
         setIsDownloading(false);
-        await markVersionAsInstalled(targetVersion);
-        onVersionUpdated?.(targetVersion);
-        showToast('Файл готов к установке! ✨', { type: 'success' });
+        showToast('APK загружен, установка запущена! ✨', { type: 'success' });
+        onClose();
       } else {
         setIsDownloading(false);
         setDownloadError(res.error || 'Ошибка при установке файла');
-        showToast('Не удалось установить APK', { type: 'error' });
+        showToast('Не удалось скачать APK', { type: 'error' });
       }
     } catch (err: any) {
       setIsDownloading(false);
-      setDownloadError(err?.message || 'Ошибка загрузки обновления');
-      showToast('Ошибка загрузки обновления', { type: 'error' });
-    }
-  };
-
-  const handleMarkAsInstalled = async () => {
-    try {
-      await markVersionAsInstalled(targetVersion);
-      setManuallyConfirmed(true);
-      onVersionUpdated?.(targetVersion);
-      showToast(`Версия v${targetVersion} подтверждена как актуальная! ✨`, {
-        type: 'success',
-      });
-    } catch {
-      showToast('Не удалось обновить статус версии', { type: 'error' });
+      setDownloadError(err?.message || 'Ошибка загрузки файла');
+      showToast('Ошибка загрузки файла', { type: 'error' });
     }
   };
 
   const progressPercent = Math.min(Math.round(downloadProgress * 100), 100);
   const downloadedMb = (downloadedBytes / (1024 * 1024)).toFixed(1);
-  const totalMb = totalBytes > 0 ? (totalBytes / (1024 * 1024)).toFixed(1) : sizeMb.toString();
+  const totalMb = (totalBytes / (1024 * 1024)).toFixed(1);
+  const notes = release ? formatReleaseNotes(release.notes) : '';
+  const publishedLabel = release ? formatDate(release.publishedAt) : '';
+  const apkSizeLabel = release ? formatSize(release.apkSize) : '';
 
   return (
     <BottomSheetModal
       visible={visible}
       onClose={isDownloading ? () => {} : onClose}
       maxHeight="92%"
-      height="84%"
+      height="78%"
     >
       <ScrollView
         style={styles.container}
@@ -124,72 +170,137 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.header}>
-          <View
-            style={[
-              styles.iconCircle,
-              !hasUpdate && {
-                backgroundColor: `${theme.colors.success}18`,
-                borderColor: `${theme.colors.success}40`,
-              },
-            ]}
-          >
+          <View style={styles.iconCircle}>
             <Ionicons
-              name={hasUpdate ? 'sparkles' : 'checkmark-circle'}
+              name={checkState === 'latest' ? 'checkmark-done-circle' : 'cloud-download'}
               size={28}
-              color={hasUpdate ? theme.colors.primary : theme.colors.success}
+              color={checkState === 'latest' ? theme.colors.success : theme.colors.primary}
             />
           </View>
-          <Text style={styles.title}>
-            {hasUpdate ? 'Доступно обновление!' : 'У вас актуальная версия ✨'}
-          </Text>
-
-          {hasUpdate ? (
-            <View style={styles.versionRow}>
-              <View style={styles.versionBadgeCurrent}>
-                <Text style={styles.versionTextCurrent}>Текущая: v{currentVersion}</Text>
-              </View>
-              <Ionicons name="arrow-forward" size={14} color={theme.colors.textMuted} />
-              <View style={styles.versionBadgeNew}>
-                <Text style={styles.versionTextNew}>Новая: v{targetVersion}</Text>
-              </View>
-            </View>
-          ) : (
-            <View style={styles.versionBadgeCurrentSuccess}>
-              <Ionicons name="checkmark-done" size={15} color={theme.colors.success} />
-              <Text style={styles.versionTextCurrentSuccess}>
-                v{targetVersion} · Самая свежая версия
-              </Text>
-            </View>
-          )}
+          <Text style={styles.title}>Обновление приложения</Text>
+          <View style={styles.versionBadge}>
+            <Ionicons name="phone-portrait-outline" size={14} color={theme.colors.success} />
+            <Text style={styles.versionBadgeText}>
+              Текущая версия: v{CURRENT_APP_VERSION}
+            </Text>
+          </View>
         </View>
 
-        <Card style={styles.card}>
-          <View style={styles.cardHeader}>
-            <Ionicons
-              name={hasUpdate ? 'newspaper-outline' : 'shield-checkmark-outline'}
-              size={17}
-              color={hasUpdate ? theme.colors.primary : theme.colors.success}
-            />
-            <Text style={styles.cardTitle}>
-              {hasUpdate ? 'Что нового в этой версии' : 'Система в актуальном состоянии'}
-            </Text>
-            <View style={styles.sizePill}>
-              <Text style={styles.sizePillText}>~{sizeMb} МБ</Text>
-            </View>
-          </View>
-          <Text style={styles.notesText}>
-            {hasUpdate
-              ? releaseNotes
-              : 'Вы используете последнюю версию PartySplit. Все функции, синхронизация расходов с Google Sheets и системные уведомления работают в штатном режиме.'}
-          </Text>
-        </Card>
+        {checkState === 'checking' && (
+          <Card style={styles.statusCard}>
+            <ActivityIndicator size="small" color={theme.colors.primary} />
+            <Text style={styles.statusText}>Проверяем обновления на GitHub...</Text>
+          </Card>
+        )}
 
-        {isDownloading && (
+        {checkState === 'error' && (
+          <View style={styles.errorBox}>
+            <View style={styles.errorHeader}>
+              <Ionicons name="alert-circle" size={18} color={theme.colors.danger} />
+              <Text style={styles.errorTitle}>Не удалось проверить обновления</Text>
+            </View>
+            <Text style={styles.errorText}>{checkError}</Text>
+            <Button
+              title="Проверить снова"
+              variant="secondary"
+              size="md"
+              icon="refresh"
+              onPress={() => void runCheck()}
+              style={styles.retryButton}
+            />
+          </View>
+        )}
+
+        {checkState === 'latest' && release && (
+          <Card style={styles.latestCard}>
+            <View style={styles.latestIconRow}>
+              <Ionicons
+                name="checkmark-circle"
+                size={30}
+                color={theme.colors.success}
+              />
+            </View>
+            <Text style={styles.latestTitle}>У вас установлена последняя версия</Text>
+            <Text style={styles.latestSubtitle}>
+              Текущая v{CURRENT_APP_VERSION} · последняя на GitHub v{release.version}
+            </Text>
+          </Card>
+        )}
+
+        {checkState === 'update' && release && (
+          <>
+            <Card style={styles.releaseCard}>
+              <View style={styles.releaseTopRow}>
+                <View style={styles.releaseTitleBlock}>
+                  <Text style={styles.releaseLabel}>Доступна новая версия</Text>
+                  <Text style={styles.releaseVersion}>v{release.version}</Text>
+                </View>
+                {apkSizeLabel ? (
+                  <View style={styles.sizeBadge}>
+                    <Text style={styles.sizeBadgeText}>{apkSizeLabel}</Text>
+                  </View>
+                ) : null}
+              </View>
+
+              {release.releaseName ? (
+                <Text style={styles.releaseName}>{release.releaseName}</Text>
+              ) : null}
+
+              {publishedLabel ? (
+                <Text style={styles.releaseDate}>Опубликовано {publishedLabel}</Text>
+              ) : null}
+
+              <View style={styles.notesDivider} />
+              <Text style={styles.notesTitle}>Что нового</Text>
+              <Text style={notes ? styles.notesText : styles.notesEmpty} selectable>
+                {notes || 'Описание изменений не указано.'}
+              </Text>
+            </Card>
+
+            {!isDownloading && (
+              <>
+                <Button
+                  title="Обновить"
+                  onPress={() => void handleDownload()}
+                  icon="cloud-download-outline"
+                  style={styles.updateButton}
+                />
+
+                {downloadError ? (
+                  <View style={styles.errorBox}>
+                    <View style={styles.errorHeader}>
+                      <Ionicons name="alert-circle" size={18} color={theme.colors.danger} />
+                      <Text style={styles.errorTitle}>Не удалось скачать или установить</Text>
+                    </View>
+                    <Text style={styles.errorText}>{downloadError}</Text>
+
+                    {Platform.OS === 'android' && (
+                      <TouchableOpacity
+                        style={styles.unknownSourcesButton}
+                        onPress={() => void openUnknownAppSourcesPermission()}
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons
+                          name="shield-checkmark"
+                          size={16}
+                          color={theme.colors.primary}
+                        />
+                        <Text style={styles.unknownSourcesText}>
+                          Разрешить установку неизвестных приложений
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                ) : null}
+              </>
+            )}
+          </>
+        )}
+
+        {isDownloading && release && (
           <Card style={styles.progressCard}>
             <View style={styles.progressHeader}>
-              <Text style={styles.progressStatusText}>
-                Загрузка APK с Google Диска...
-              </Text>
+              <Text style={styles.progressStatusText}>Скачивание APK с GitHub...</Text>
               <Text style={styles.progressPercentText}>{progressPercent}%</Text>
             </View>
 
@@ -204,113 +315,28 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
 
             <View style={styles.progressFooter}>
               <Text style={styles.progressBytesText}>
-                {downloadedMb} МБ из {totalMb} МБ
+                {totalBytes > 0 ? `${downloadedMb} МБ из ${totalMb} МБ` : 'Подготовка...'}
               </Text>
               <ActivityIndicator size="small" color={theme.colors.primary} />
             </View>
           </Card>
         )}
 
-        {downloadError && (
-          <View style={styles.errorBox}>
-            <View style={styles.errorHeader}>
-              <Ionicons name="alert-circle" size={18} color={theme.colors.danger} />
-              <Text style={styles.errorTitle}>Не удалось установить автоматически</Text>
-            </View>
-            <Text style={styles.errorText}>{downloadError}</Text>
+        {release?.releaseUrl && checkState === 'update' && !isDownloading ? (
+          <TouchableOpacity
+            style={styles.githubLink}
+            onPress={() => void Linking.openURL(release.releaseUrl)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="logo-github" size={16} color={theme.colors.textSecondary} />
+            <Text style={styles.githubLinkText}>Открыть релиз на GitHub</Text>
+          </TouchableOpacity>
+        ) : null}
 
-            {Platform.OS === 'android' && (
-              <TouchableOpacity
-                style={styles.unknownSourcesButton}
-                onPress={() => void openUnknownAppSourcesPermission()}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="shield-checkmark" size={16} color={theme.colors.primary} />
-                <Text style={styles.unknownSourcesText}>
-                  Разрешить установку неизвестных приложений
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
-
-        <View style={styles.helpBox}>
-          <Ionicons name="shield-checkmark-outline" size={16} color={theme.colors.primary} />
-          <Text style={styles.helpText}>
-            Файл скачивается напрямую из защищённого облака Google Диска. При первом
-            обновлении Android может запросить разрешение на установку для PartySplit.
-          </Text>
-        </View>
-
-        <View style={styles.actionButtons}>
-          {hasUpdate ? (
-            <>
-              <Button
-                title={
-                  isDownloading
-                    ? `Скачивание (${progressPercent}%)...`
-                    : isReadyToInstall
-                    ? 'Установить обновление'
-                    : 'Обновить сейчас'
-                }
-                onPress={handleStartUpdate}
-                loading={isDownloading}
-                disabled={isDownloading}
-                icon="cloud-download-outline"
-                style={styles.updateButton}
-              />
-
-              {!isDownloading && (
-                <TouchableOpacity
-                  style={styles.alreadyInstalledButton}
-                  onPress={handleMarkAsInstalled}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons
-                    name="checkmark-circle-outline"
-                    size={17}
-                    color={theme.colors.success}
-                  />
-                  <Text style={styles.alreadyInstalledText}>
-                    Я уже установил эту версию (v{targetVersion})
-                  </Text>
-                </TouchableOpacity>
-              )}
-
-              {!isDownloading && (
-                <TouchableOpacity
-                  style={styles.cancelButton}
-                  onPress={onClose}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.cancelButtonText}>Напомнить позже</Text>
-                </TouchableOpacity>
-              )}
-            </>
-          ) : (
-            <>
-              <Button
-                title="Отлично, закрыть"
-                onPress={onClose}
-                icon="checkmark-circle-outline"
-                style={styles.updateButton}
-              />
-
-              <TouchableOpacity
-                style={styles.cancelButton}
-                onPress={handleStartUpdate}
-                disabled={isDownloading}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.cancelButtonText}>
-                  {isDownloading
-                    ? `Скачивание (${progressPercent}%)...`
-                    : 'Переустановить APK повторно'}
-                </Text>
-              </TouchableOpacity>
-            </>
-          )}
-        </View>
+        <Text style={styles.footerNote}>
+          Обновления проверяются через GitHub Releases. APK скачивается напрямую из
+          прикреплённого файла релиза и открывается в установщике Android.
+        </Text>
       </ScrollView>
     </BottomSheetModal>
   );
@@ -349,101 +375,136 @@ function createStyles(theme: ThemeTokens) {
       textAlign: 'center',
       letterSpacing: -0.3,
     },
-    versionRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 8,
-      marginTop: 8,
-    },
-    versionBadgeNew: {
-      backgroundColor: theme.colors.primary,
-      paddingHorizontal: 10,
-      paddingVertical: 3,
-      borderRadius: 12,
-    },
-    versionTextNew: {
-      color: theme.colors.textInverse,
-      fontSize: 13,
-      fontWeight: '700',
-    },
-    versionBadgeCurrent: {
-      backgroundColor: theme.colors.surfaceElevated,
-      paddingHorizontal: 8,
-      paddingVertical: 3,
-      borderRadius: 12,
-    },
-    versionTextCurrent: {
-      color: theme.colors.textMuted,
-      fontSize: 12,
-      fontWeight: '500',
-    },
-    versionBadgeCurrentSuccess: {
+    versionBadge: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 6,
+      marginTop: 8,
       backgroundColor: `${theme.colors.success}16`,
       borderWidth: 1,
       borderColor: `${theme.colors.success}35`,
       paddingHorizontal: 12,
       paddingVertical: 5,
       borderRadius: 14,
-      marginTop: 8,
     },
-    versionTextCurrentSuccess: {
+    versionBadgeText: {
       color: theme.colors.success,
       fontSize: 12,
       fontWeight: '700',
     },
-    alreadyInstalledButton: {
+    statusCard: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
-      gap: 8,
-      backgroundColor: `${theme.colors.success}14`,
-      borderWidth: 1,
-      borderColor: `${theme.colors.success}35`,
-      paddingVertical: 12,
-      paddingHorizontal: 16,
-      borderRadius: 14,
-    },
-    alreadyInstalledText: {
-      fontSize: 13,
-      fontWeight: '700',
-      color: theme.colors.success,
-    },
-    card: {
+      gap: 10,
       backgroundColor: theme.colors.surface,
       borderColor: theme.colors.surfaceBorder,
       padding: theme.spacing.md,
-      gap: 10,
     },
-    cardHeader: {
+    statusText: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: theme.colors.textSecondary,
+    },
+    latestCard: {
+      alignItems: 'center',
+      backgroundColor: `${theme.colors.success}10`,
+      borderColor: `${theme.colors.success}45`,
+      padding: theme.spacing.lg,
+      gap: 6,
+    },
+    latestIconRow: {
+      marginBottom: 2,
+    },
+    latestTitle: {
+      fontSize: 16,
+      fontWeight: '800',
+      color: theme.colors.textPrimary,
+      textAlign: 'center',
+    },
+    latestSubtitle: {
+      fontSize: 12,
+      lineHeight: 18,
+      color: theme.colors.textSecondary,
+      textAlign: 'center',
+    },
+    releaseCard: {
+      backgroundColor: theme.colors.surface,
+      borderColor: theme.colors.primary,
+      padding: theme.spacing.md,
+      gap: 6,
+    },
+    releaseTopRow: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
+      gap: 8,
     },
-    cardTitle: {
+    releaseTitleBlock: {
       flex: 1,
-      fontSize: 14,
+    },
+    releaseLabel: {
+      fontSize: 11,
+      fontWeight: '700',
+      letterSpacing: 0.4,
+      textTransform: 'uppercase',
+      color: theme.colors.textMuted,
+    },
+    releaseVersion: {
+      fontSize: 22,
+      fontWeight: '800',
+      color: theme.colors.primary,
+      letterSpacing: -0.4,
+    },
+    sizeBadge: {
+      paddingHorizontal: 9,
+      paddingVertical: 4,
+      borderRadius: 10,
+      backgroundColor: `${theme.colors.primary}16`,
+      borderWidth: 1,
+      borderColor: `${theme.colors.primary}35`,
+    },
+    sizeBadgeText: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: theme.colors.primary,
+    },
+    releaseName: {
+      fontSize: 13,
       fontWeight: '700',
       color: theme.colors.textPrimary,
-      marginLeft: 6,
     },
-    sizePill: {
-      backgroundColor: theme.colors.surfaceElevated,
-      paddingHorizontal: 8,
-      paddingVertical: 2,
-      borderRadius: 10,
-    },
-    sizePillText: {
+    releaseDate: {
       fontSize: 11,
       color: theme.colors.textMuted,
-      fontWeight: '600',
+    },
+    notesDivider: {
+      height: 1,
+      backgroundColor: theme.colors.surfaceBorder,
+      marginVertical: 6,
+    },
+    notesTitle: {
+      fontSize: 12,
+      fontWeight: '800',
+      color: theme.colors.textPrimary,
     },
     notesText: {
-      fontSize: 13,
-      lineHeight: 20,
+      fontSize: 12,
+      lineHeight: 18,
       color: theme.colors.textSecondary,
+    },
+    notesEmpty: {
+      fontSize: 12,
+      lineHeight: 18,
+      fontStyle: 'italic',
+      color: theme.colors.textMuted,
+    },
+    updateButton: {
+      width: '100%',
+    },
+    retryButton: {
+      width: '100%',
+      marginTop: 6,
     },
     progressCard: {
       backgroundColor: theme.colors.surface,
@@ -526,36 +587,23 @@ function createStyles(theme: ThemeTokens) {
       fontWeight: '600',
       color: theme.colors.primary,
     },
-    helpBox: {
+    githubLink: {
       flexDirection: 'row',
-      alignItems: 'flex-start',
-      gap: 8,
-      backgroundColor: theme.colors.surfaceElevated,
-      padding: 10,
-      borderRadius: 10,
-    },
-    helpText: {
-      flex: 1,
-      fontSize: 11,
-      lineHeight: 15,
-      color: theme.colors.textMuted,
-    },
-    actionButtons: {
-      gap: 8,
-      marginTop: 6,
-    },
-    updateButton: {
-      width: '100%',
-    },
-    cancelButton: {
-      paddingVertical: 10,
       alignItems: 'center',
       justifyContent: 'center',
+      gap: 6,
+      paddingVertical: 4,
     },
-    cancelButtonText: {
-      fontSize: 13,
-      color: theme.colors.textMuted,
+    githubLinkText: {
+      fontSize: 12,
       fontWeight: '600',
+      color: theme.colors.textSecondary,
+    },
+    footerNote: {
+      fontSize: 11,
+      lineHeight: 16,
+      textAlign: 'center',
+      color: theme.colors.textMuted,
     },
   });
 }

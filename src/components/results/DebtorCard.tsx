@@ -42,6 +42,9 @@ export const DebtorCard: React.FC<DebtorCardProps> = ({
   const currentPartyId = usePartyStore((s) => s.currentParty.id);
   const session = usePartyStore((s) => s.session);
   const isPendingSync = isOperationPendingForTransfer(currentPartyId, transfer.id) || isUpdating;
+  const currentUserId = session?.user.id;
+  const canConfirmPayment =
+    currentUserId === transfer.fromUser.id || currentUserId === transfer.toUser.id;
 
   const fromUserAvatar =
     session?.user.id === transfer.fromUser.id
@@ -350,27 +353,36 @@ export const DebtorCard: React.FC<DebtorCardProps> = ({
         </PressableScale>
       </View>
 
-      <PressableScale
-        style={[styles.settleButton, isSettled && styles.settleButtonUndo]}
-        onPress={() => onToggleSettled(transfer)}
-        disabled={isUpdating}
-        haptic
-        accessibilityRole="button"
-      >
-        <Ionicons
-          name={isSettled ? 'refresh-outline' : 'checkmark-done-outline'}
-          size={17}
-          color={isSettled ? theme.colors.textSecondary : theme.colors.textInverse}
-        />
-        <Text
-          style={[
-            styles.settleText,
-            isSettled && { color: theme.colors.textSecondary },
-          ]}
+      {canConfirmPayment ? (
+        <PressableScale
+          style={[styles.settleButton, isSettled && styles.settleButtonUndo]}
+          onPress={() => onToggleSettled(transfer)}
+          disabled={isUpdating}
+          haptic
+          accessibilityRole="button"
         >
-          {isSettled ? 'Вернуть в ожидание' : 'Отметить оплаченным'}
-        </Text>
-      </PressableScale>
+          <Ionicons
+            name={isSettled ? 'refresh-outline' : 'checkmark-done-outline'}
+            size={17}
+            color={isSettled ? theme.colors.textSecondary : theme.colors.textInverse}
+          />
+          <Text
+            style={[
+              styles.settleText,
+              isSettled && { color: theme.colors.textSecondary },
+            ]}
+          >
+            {isSettled ? 'Вернуть в ожидание' : 'Отметить оплаченным'}
+          </Text>
+        </PressableScale>
+      ) : (
+        <View style={styles.viewerNote}>
+          <Ionicons name="lock-closed-outline" size={14} color={theme.colors.textMuted} />
+          <Text style={styles.viewerNoteText}>
+            Отметить оплату может только должник или получатель
+          </Text>
+        </View>
+      )}
     </View>
   );
 };
@@ -605,6 +617,25 @@ function createStyles(theme: ThemeTokens) {
       color: theme.colors.textInverse,
       fontSize: 13,
       fontWeight: '800',
+    },
+    viewerNote: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      paddingVertical: 10,
+      paddingHorizontal: 12,
+      borderRadius: theme.borderRadius.md,
+      borderWidth: 1,
+      borderColor: theme.colors.surfaceBorder,
+      backgroundColor: theme.colors.surfaceElevated,
+    },
+    viewerNoteText: {
+      fontSize: 11,
+      fontWeight: '600',
+      color: theme.colors.textMuted,
+      textAlign: 'center',
+      flexShrink: 1,
     },
     confettiContainer: {
       position: 'absolute',

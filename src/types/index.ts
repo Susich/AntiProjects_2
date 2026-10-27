@@ -78,6 +78,9 @@ export interface PartyEvent {
   // They are re-uploaded on refresh, but never re-uploaded just because they
   // disappeared from the sheet (that would undo another device's deletion).
   pendingExpenseIds?: string[];
+  // Shopping items deleted on this device. Kept until Google Sheets confirms
+  // the deletion, so a background refresh cannot resurrect a removed item.
+  deletedShoppingItemIds?: string[];
 }
 
 export interface SimplifiedDebtTransfer {

@@ -192,27 +192,43 @@ function readSheetRows(sheet, columns) {
   return sheet.getRange(2, 1, lastRow - 1, colsToRead).getValues();
 }
 
-/** Finds one row by an exact value in one column without loading the sheet. */
-function findRowByColumnValue(sheet, column, value, columns) {
-  var needle = (value || '').toString();
-  if (!sheet || !needle) return null;
-  var lastRow = sheet.getLastRow();
-  if (lastRow < 2) return null;
-  var lastCol = sheet.getLastColumn();
-  if (column > lastCol) return null;
-
-  var match = sheet
-    .getRange(2, column, lastRow - 1, 1)
-    .createTextFinder(needle)
-    .matchEntireCell(true)
-    .findNext();
-  if (!match) return null;
-
+/** Reads values of one sheet row. */
+function readRowByIndex(sheet, rowIndex, columns, lastCol) {
   var colsToRead = Math.min(columns, lastCol);
   return {
-    rowIndex: match.getRow(),
-    row: sheet.getRange(match.getRow(), 1, 1, colsToRead).getValues()[0]
+    rowIndex: rowIndex,
+    row: sheet.getRange(rowIndex, 1, 1, colsToRead).getValues()[0]
   };
+}
+
+/**
+ * Finds ALL rows whose value in one column equals `value` (trimmed, exact).
+ * A plain getValues scan is deliberately used instead of TextFinder: the
+ * finder can miss a cell that was written by a concurrent Apps Script
+ * execution, which silently duplicated shopping rows in the sheet.
+ */
+function findRowsByColumnValue(sheet, column, value, columns) {
+  var needle = (value || '').toString().trim();
+  if (!sheet || !needle) return [];
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return [];
+  var lastCol = sheet.getLastColumn();
+  if (column > lastCol) return [];
+
+  var values = sheet.getRange(2, column, lastRow - 1, 1).getValues();
+  var matches = [];
+  for (var i = 0; i < values.length; i++) {
+    if ((values[i][0] || '').toString().trim() === needle) {
+      matches.push(readRowByIndex(sheet, i + 2, columns, lastCol));
+    }
+  }
+  return matches;
+}
+
+/** Finds one row by an exact value in one column (first match wins). */
+function findRowByColumnValue(sheet, column, value, columns) {
+  var matches = findRowsByColumnValue(sheet, column, value, columns);
+  return matches.length > 0 ? matches[0] : null;
 }
 
 function partyCacheKey(partyId) {
@@ -323,18 +339,15 @@ function handleApiAction(action, data) {
     });
   }
 
-  // Version check for in-app APK updater
+  // Legacy update endpoint. App updates are now distributed through GitHub
+  // Releases (semver + APK asset), so the backend no longer advertises a
+  // Google Drive file. Old clients receive a clear deprecation message.
   if (action === 'getLatestVersion' || action === 'checkUpdate') {
     return jsonResponse({
-      success: true,
+      success: false,
+      deprecated: true,
       apiVersion: API_VERSION,
-      latestVersion: '1.0.5',
-      apkUrl: 'https://drive.google.com/uc?export=download&id=1Xj-OHVMDlsZKlZfOqkJPza-RSejNJH4M',
-      googleDriveFileId: '1Xj-OHVMDlsZKlZfOqkJPza-RSejNJH4M',
-      releaseNotes: 'Исправление синхронизации и багов верстки',
-      minSupportedVersion: '1.0.0',
-      publishedAt: '2026-10-22',
-      fileSizeMb: 42
+      error: 'Обновления теперь распространяются через GitHub Releases. Откройте профиль приложения и нажмите «Обновить приложение».'
     });
   }
 
@@ -878,6 +891,7 @@ function buildPartyDetailsPayload(ss, party, memberData) {
 
   var expRows = readSheetRows(ss.getSheetByName(SHEET_EXPENSES), 8);
   var expenses = [];
+  var expenseById = {};
   for (var e = 0; e < expRows.length; e++) {
     if ((expRows[e][1] || '').toString() !== party.id) continue;
     var sharedUserIds = [];
@@ -891,7 +905,7 @@ function buildPartyDetailsPayload(ss, party, memberData) {
       .map(function (id) { return (id || '').toString(); })
       .filter(function (id) { return id.length > 0; });
 
-    expenses.push({
+    var expense = {
       id: (expRows[e][0] || '').toString(),
       partyId: party.id,
       title: (expRows[e][2] || 'Расход').toString(),
@@ -900,7 +914,23 @@ function buildPartyDetailsPayload(ss, party, memberData) {
       sharedUserIds: sharedUserIds,
       createdAt: (expRows[e][6] || '').toString(),
       category: (expRows[e][7] || '').toString()
-    });
+    };
+    if (!expense.id) continue;
+
+    // Defensive de-duplication: the same one-row-per-id guarantee as shopping,
+    // so a corrupted sheet can never show a cheque twice.
+    var prevExpense = expenseById[expense.id];
+    if (!prevExpense) {
+      expenseById[expense.id] = expense;
+      expenses.push(expense);
+    } else {
+      var prevExpCreated = Date.parse(prevExpense.createdAt || '') || 0;
+      var newExpCreated = Date.parse(expense.createdAt || '') || 0;
+      if (newExpCreated >= prevExpCreated) {
+        expenses[expenses.indexOf(prevExpense)] = expense;
+        expenseById[expense.id] = expense;
+      }
+    }
   }
 
   var statusRows = readSheetRows(ss.getSheetByName(SHEET_STATUSES), 8);
@@ -921,6 +951,7 @@ function buildPartyDetailsPayload(ss, party, memberData) {
   var shoppingSheet = getOrCreateShoppingSheet(ss);
   var shopRows = readSheetRows(shoppingSheet, 11);
   var shoppingList = [];
+  var shoppingById = {};
   var currentPartyId = (party.id || '').toString().trim();
   for (var sh = 0; sh < shopRows.length; sh++) {
     var rowPartyId = (shopRows[sh][1] || '').toString().trim();
@@ -929,7 +960,7 @@ function buildPartyDetailsPayload(ss, party, memberData) {
     var actAmt = Number(shopRows[sh][7]);
     var rawBought = (shopRows[sh][5] || '').toString().trim().toLowerCase();
     var isBought = shopRows[sh][5] === true || rawBought === 'true' || rawBought === '1';
-    shoppingList.push({
+    var item = {
       id: (shopRows[sh][0] || '').toString(),
       partyId: currentPartyId,
       title: (shopRows[sh][2] || '').toString(),
@@ -941,7 +972,24 @@ function buildPartyDetailsPayload(ss, party, memberData) {
       convertedExpenseId: (shopRows[sh][8] || '').toString() || undefined,
       category: (shopRows[sh][9] || '').toString() || undefined,
       createdAt: (shopRows[sh][10] || '').toString()
-    });
+    };
+    if (!item.id) continue;
+
+    // A corrupted sheet may contain several rows with the same id. Serve the
+    // newest intent only — otherwise clients receive the same item twice and
+    // its state flips between poll responses.
+    var prevItem = shoppingById[item.id];
+    if (!prevItem) {
+      shoppingById[item.id] = item;
+      shoppingList.push(item);
+    } else {
+      var prevCreated = Date.parse(prevItem.createdAt || '') || 0;
+      var newCreated = Date.parse(item.createdAt || '') || 0;
+      if (newCreated >= prevCreated) {
+        shoppingList[shoppingList.indexOf(prevItem)] = item;
+        shoppingById[item.id] = item;
+      }
+    }
   }
 
   return {
@@ -1410,6 +1458,12 @@ function setTransferStatus(ss, data) {
     return errorResponse('Участники перевода не состоят в комнате');
   }
 
+  // Only the debtor or the creditor of this transfer may change its status.
+  // Every other room member can read the status but not confirm payments.
+  if (auth.user.id !== fromUserId && auth.user.id !== toUserId) {
+    return errorResponse('Отметить оплату может только должник или получатель');
+  }
+
   var sheet = ss.getSheetByName(SHEET_STATUSES);
   var rows = readSheetRows(sheet, 8);
   var rowIndex = -1;
@@ -1488,10 +1542,20 @@ function addShoppingItem(ss, data) {
   var createdAt = (data.createdAt || '').toString() || new Date().toISOString();
 
   var sheet = getOrCreateShoppingSheet(ss);
-  var existing = findRowByColumnValue(sheet, 1, id, 11);
 
-  if (existing && (existing.row[1] || '').toString() === party.id) {
-    sheet.getRange(existing.rowIndex, 3, 1, 8).setValues([[
+  // One id must have exactly one row. Anything beyond it is garbage left by
+  // previously lost lookups — collapse it, otherwise every client would read
+  // the same shopping item twice and the bought/unbought state would flip.
+  var partyRows = findRowsByColumnValue(sheet, 1, id, 11).filter(function (match) {
+    return (match.row[1] || '').toString() === party.id;
+  });
+
+  if (partyRows.length > 0) {
+    // Delete duplicates from the bottom up so row indexes stay valid.
+    for (var dup = partyRows.length - 1; dup >= 1; dup--) {
+      sheet.deleteRow(partyRows[dup].rowIndex);
+    }
+    sheet.getRange(partyRows[0].rowIndex, 3, 1, 8).setValues([[
       title, estimatedAmount || '', assignedUserId, isBought, boughtById,
       actualAmount || '', convertedExpenseId, category
     ]]);
@@ -1526,36 +1590,54 @@ function updateShoppingItem(ss, data) {
   var itemId = (data.id || data.itemId || '').toString();
   if (!itemId) return errorResponse('Укажите id покупки');
 
-  var sheet = getOrCreateShoppingSheet(ss);
-  var existing = findRowByColumnValue(sheet, 1, itemId, 11);
-
-  var partyId = existing ? (existing.row[1] || '').toString() : (data.partyId || data.roomId || '').toString();
+  var partyId = (data.partyId || data.roomId || '').toString();
   var party = findPartyRow(ss, { partyId: partyId });
   if (!party) return errorResponse('Тусовка не найдена');
   var auth = requireMember(ss, data, party.id);
   if (auth.error) return errorResponse(auth.error);
 
-  var title = data.title !== undefined ? (data.title || '').toString().trim() : (existing ? existing.row[2] : 'Покупка');
-  var estimatedAmount = data.estimatedAmount !== undefined ? (Number(data.estimatedAmount) || '') : (existing ? existing.row[3] : '');
-  var assignedUserId = data.assignedUserId !== undefined ? (data.assignedUserId || '').toString() : (existing ? existing.row[4] : '');
-  var isBought = data.isBought !== undefined ? (data.isBought === true || data.isBought === 'true') : (existing ? existing.row[5] : false);
-  var boughtById = data.boughtById !== undefined ? (data.boughtById || '').toString() : (existing ? existing.row[6] : '');
-  var actualAmount = data.actualAmount !== undefined ? (Number(data.actualAmount) || '') : (existing ? existing.row[7] : '');
-  var convertedExpenseId = data.convertedExpenseId !== undefined ? (data.convertedExpenseId || '').toString() : (existing ? existing.row[8] : '');
-  var category = data.category !== undefined ? (data.category || '').toString() : (existing ? existing.row[9] : '');
+  var sheet = getOrCreateShoppingSheet(ss);
+  var partyRows = findRowsByColumnValue(sheet, 1, itemId, 11).filter(function (match) {
+    return (match.row[1] || '').toString() === party.id;
+  });
 
-  if (existing) {
-    sheet.getRange(existing.rowIndex, 3, 1, 8).setValues([[
-      title, estimatedAmount, assignedUserId, isBought, boughtById, actualAmount, convertedExpenseId, category
-    ]]);
-  } else {
-    var createdAt = new Date().toISOString();
-    sheet.appendRow([
-      itemId, party.id, title, estimatedAmount, assignedUserId,
-      isBought, boughtById, actualAmount, convertedExpenseId,
-      category, createdAt
-    ]);
+  // The row is gone: someone deleted the item while this update was queued or
+  // another member's view was briefly stale. Never resurrect the item with a
+  // fresh row — just confirm so the optimistic local copy is dropped by poll.
+  if (partyRows.length === 0) return jsonResponse({ success: true });
+
+  // Collapse duplicates left behind by earlier lost lookups.
+  for (var dup = partyRows.length - 1; dup >= 1; dup--) {
+    sheet.deleteRow(partyRows[dup].rowIndex);
   }
+  var existing = partyRows[0];
+
+  var title = data.title !== undefined && data.title !== null ? (data.title || '').toString().trim() : existing.row[2];
+  var estimatedAmount = data.estimatedAmount !== undefined && data.estimatedAmount !== null
+    ? (Number(data.estimatedAmount) || '')
+    : existing.row[3];
+  var assignedUserId = data.assignedUserId !== undefined && data.assignedUserId !== null
+    ? (data.assignedUserId || '').toString()
+    : existing.row[4];
+  var isBought = data.isBought !== undefined && data.isBought !== null
+    ? (data.isBought === true || data.isBought === 'true')
+    : existing.row[5];
+  var boughtById = data.boughtById !== undefined && data.boughtById !== null
+    ? (data.boughtById || '').toString()
+    : existing.row[6];
+  var actualAmount = data.actualAmount !== undefined && data.actualAmount !== null
+    ? (Number(data.actualAmount) || '')
+    : existing.row[7];
+  var convertedExpenseId = data.convertedExpenseId !== undefined && data.convertedExpenseId !== null
+    ? (data.convertedExpenseId || '').toString()
+    : existing.row[8];
+  var category = data.category !== undefined && data.category !== null
+    ? (data.category || '').toString()
+    : existing.row[9];
+
+  sheet.getRange(existing.rowIndex, 3, 1, 8).setValues([[
+    title, estimatedAmount, assignedUserId, isBought, boughtById, actualAmount, convertedExpenseId, category
+  ]]);
   invalidatePartyCache(party.id);
 
   return jsonResponse({ success: true });
@@ -1566,16 +1648,26 @@ function deleteShoppingItem(ss, data) {
   if (!itemId) return errorResponse('Укажите id покупки');
 
   var sheet = ss.getSheetByName(SHEET_SHOPPING);
-  var existing = findRowByColumnValue(sheet, 1, itemId, 11);
-  if (!existing) return jsonResponse({ success: true });
+  var allRows = findRowsByColumnValue(sheet, 1, itemId, 11);
+  if (allRows.length === 0) return jsonResponse({ success: true });
 
-  var partyId = (existing.row[1] || '').toString();
+  var partyId = (allRows[0].row[1] || '').toString();
   var party = findPartyRow(ss, { partyId: partyId });
   if (!party) return errorResponse('Тусовка не найдена');
   var auth = requireMember(ss, data, party.id);
   if (auth.error) return errorResponse(auth.error);
 
-  sheet.deleteRow(existing.rowIndex);
+  // Delete every row of this item (duplicates included), bottom-up.
+  var ownRows = allRows
+    .filter(function (match) {
+      return (match.row[1] || '').toString() === party.id;
+    })
+    .sort(function (a, b) {
+      return b.rowIndex - a.rowIndex;
+    });
+  for (var i = 0; i < ownRows.length; i++) {
+    sheet.deleteRow(ownRows[i].rowIndex);
+  }
   invalidatePartyCache(party.id);
   return jsonResponse({ success: true });
 }

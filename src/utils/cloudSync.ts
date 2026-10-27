@@ -20,9 +20,10 @@ export function mapCloudParticipants(res: PartyApiResponse): UserProfile[] {
 }
 
 export function mapCloudExpenses(expenses?: CloudExpense[]): ExpenseItem[] {
-  return (expenses || []).map((e) => {
+  const byId = new Map<string, ExpenseItem>();
+  return (expenses || []).reduce<ExpenseItem[]>((acc, e) => {
     const category = String(e.category || '') as ItemCategory;
-    return {
+    const mapped: ExpenseItem = {
       id: String(e.id),
       title: String(e.title || 'Расход'),
       amount: Number(e.amount) || 0,
@@ -31,34 +32,83 @@ export function mapCloudExpenses(expenses?: CloudExpense[]): ExpenseItem[] {
       category: VALID_CATEGORIES.includes(category) ? category : undefined,
       date: e.createdAt,
     };
-  });
+    if (!mapped.id) return acc;
+
+    // Defensive id de-duplication (write races could duplicate sheet rows):
+    // the later row (newer createdAt) represents the freshest state.
+    const prev = byId.get(mapped.id);
+    if (prev) {
+      const prevMs = Date.parse(prev.date || '') || 0;
+      const nextMs = Date.parse(mapped.date || '') || 0;
+      if (nextMs < prevMs) return acc;
+      acc.splice(acc.indexOf(prev), 1, mapped);
+    } else {
+      acc.push(mapped);
+    }
+    byId.set(mapped.id, mapped);
+    return acc;
+  }, []);
 }
 
-export function mapCloudShoppingList(items?: CloudShoppingItem[]): ShoppingItem[] {
-  return (items || []).map((item) => {
+function parseShoppingBoolean(value: unknown): boolean {
+  if (value === true) return true;
+  if (typeof value === 'number') return value !== 0;
+  const text = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return text === 'true' || text === '1' || text === 'yes' || text === 'да';
+}
+
+function parsePositiveAmount(value: unknown): number | undefined {
+  if (value === null || value === undefined || value === '') return undefined;
+  const normalized =
+    typeof value === 'string' ? value.replace(/\s+/g, '').replace(',', '.') : value;
+  const numeric = typeof normalized === 'number' ? normalized : Number(normalized);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : undefined;
+}
+
+export function mapCloudShoppingList(
+  items?: CloudShoppingItem[],
+  partyId?: string
+): ShoppingItem[] {
+  const byId = new Map<string, ShoppingItem>();
+  const result: ShoppingItem[] = [];
+  for (const item of items || []) {
+    // Defensively ignore rows that explicitly belong to another room.
+    if (
+      partyId &&
+      item.partyId &&
+      String(item.partyId).trim() !== String(partyId).trim()
+    ) {
+      continue;
+    }
     const category = String(item.category || '') as ItemCategory;
-    const rawBought = item.isBought as unknown;
-    const isBought =
-      rawBought === true ||
-      String(rawBought).trim().toLowerCase() === 'true' ||
-      String(rawBought).trim() === '1';
-
-    const estNum = Number(item.estimatedAmount);
-    const actNum = Number(item.actualAmount);
-
-    return {
+    const mapped: ShoppingItem = {
       id: String(item.id),
       title: String(item.title || 'Покупка'),
-      estimatedAmount: !isNaN(estNum) && estNum > 0 ? estNum : undefined,
+      estimatedAmount: parsePositiveAmount(item.estimatedAmount),
       assignedUserId: item.assignedUserId ? String(item.assignedUserId) : undefined,
-      isBought,
+      isBought: parseShoppingBoolean(item.isBought),
       boughtById: item.boughtById ? String(item.boughtById) : undefined,
-      actualAmount: !isNaN(actNum) && actNum > 0 ? actNum : undefined,
+      actualAmount: parsePositiveAmount(item.actualAmount),
       convertedExpenseId: item.convertedExpenseId ? String(item.convertedExpenseId) : undefined,
       category: VALID_CATEGORIES.includes(category) ? category : undefined,
       createdAt: item.createdAt ? String(item.createdAt) : undefined,
     };
-  });
+    if (!mapped.id) continue;
+
+    // Defensive id de-duplication (write races could duplicate sheet rows):
+    // the row with the newest createdAt represents the latest intent.
+    const prev = byId.get(mapped.id);
+    if (prev) {
+      const prevMs = Date.parse(prev.createdAt || '') || 0;
+      const nextMs = Date.parse(mapped.createdAt || '') || 0;
+      if (nextMs < prevMs) continue;
+      result.splice(result.indexOf(prev), 1, mapped);
+    } else {
+      result.push(mapped);
+    }
+    byId.set(mapped.id, mapped);
+  }
+  return result;
 }
 
 function isSameExpense(a: ExpenseItem, b: ExpenseItem): boolean {
@@ -224,12 +274,22 @@ export function mergeCloudParty(
     settledTransferIds = local.settledTransferIds || [];
   }
 
-  // Merge shopping items with conflict resolution (preserve pending local writes)
-  const rawCloudShopping = res.shoppingList ? mapCloudShoppingList(res.shoppingList) : [];
-  const cloudShoppingById = new Map(rawCloudShopping.map((item) => [item.id, item]));
+  // Merge shopping items with conflict resolution (preserve pending local writes).
+  // `mapCloudShoppingList` also drops rows that belong to another room: a copy
+  // or paste mistake in the sheet must not leak another party's purchases.
+  const rawCloudShopping = res.shoppingList
+    ? mapCloudShoppingList(res.shoppingList, local.id)
+    : [];
+  // Shopping items deleted on this device stay deleted even if the (possibly
+  // stale) cloud snapshot still contains their rows. The caller retries the
+  // deletion for anything that still exists server-side.
+  const shoppingTombstoneIds = new Set(local.deletedShoppingItemIds || []);
+  const rawCloudShoppingById = new Map(rawCloudShopping.map((item) => [item.id, item]));
+  const cloudShopping = rawCloudShopping.filter((item) => !shoppingTombstoneIds.has(item.id));
+  const cloudShoppingById = new Map(cloudShopping.map((item) => [item.id, item]));
   const localShoppingById = new Map((local.shoppingList || []).map((item) => [item.id, item]));
 
-  const shoppingList = rawCloudShopping.map((cloudItem) => {
+  const shoppingList = cloudShopping.map((cloudItem) => {
     const localItem = localShoppingById.get(cloudItem.id);
     const hasPendingMutation = isOperationPendingForShoppingItem(local.id, cloudItem.id);
     if (localItem && hasPendingMutation) {
@@ -266,10 +326,18 @@ export function mergeCloudParty(
       title: res.party.title,
       participants: profiles.length > 0 ? profiles : local.participants,
       expenses,
-      shoppingList: shoppingList.length > 0 || res.shoppingList ? shoppingList : local.shoppingList || [],
+      // `undefined` means an older backend did not return shopping data, so
+      // keep the local list. An empty array is authoritative and clears it
+      // (except for pending/recent local additions handled above).
+      shoppingList: res.shoppingList ? shoppingList : local.shoppingList || [],
       settledTransferIds,
       deletedExpenseIds: remainingTombstones,
       pendingExpenseIds: remainingPending,
+      // A shopping tombstone is only needed while Google Sheets still contains
+      // the row; confirmed deletions can be forgotten.
+      deletedShoppingItemIds: options.keepLocalOnlyExpenses
+        ? (local.deletedShoppingItemIds || []).filter((id) => rawCloudShoppingById.has(id))
+        : [],
     },
   };
 }

@@ -234,7 +234,14 @@ function findCoalescable(key: string): QueueItem | null {
 
 function mergeInto(existing: QueueItem, incoming: QueueItem): void {
   existing.action = incoming.action;
-  existing.data = incoming.data;
+  // updateShoppingItem sends field diffs (only the fields the user changed).
+  // Their payloads must accumulate while coalesced, otherwise every edit
+  // inside one debounce window would drop the edits of the previous one.
+  // All other actions send full snapshots, so replacing the data is correct.
+  existing.data =
+    incoming.action === 'updateShoppingItem'
+      ? { ...existing.data, ...incoming.data }
+      : incoming.data;
   existing.partyId = incoming.partyId || existing.partyId;
   existing.debounceMs = incoming.debounceMs;
   existing.priority = Math.max(existing.priority, incoming.priority);
@@ -577,23 +584,27 @@ export function isOperationPendingForExpense(
 
 /**
  * Checks if a shopping item operation is in the offline queue.
+ * Strictly scoped to shopping: an unrelated operation whose payload merely
+ * contains the same id field must not freeze the merge for this item.
  */
 export function isOperationPendingForShoppingItem(
   partyId: string,
   itemId: string
 ): boolean {
   const all = [...delayed, ...ready, ...inFlight];
+  const coalesceSuffix = `${partyId}:${itemId}`;
   return all.some(
     (item) =>
       item.partyId === partyId &&
-      (item.coalesceKey === `shopping:update:${partyId}:${itemId}` ||
-        item.coalesceKey === `shopping:add:${partyId}:${itemId}` ||
-        item.coalesceKey === `shopping:delete:${partyId}:${itemId}` ||
-        (item.action === 'addShoppingItem' && (item.data?.id === itemId || item.data?.itemId === itemId)) ||
-        (item.action === 'updateShoppingItem' && (item.data?.id === itemId || item.data?.itemId === itemId)) ||
-        (item.action === 'deleteShoppingItem' && (item.data?.id === itemId || item.data?.itemId === itemId)) ||
-        item.data?.id === itemId ||
-        item.data?.itemId === itemId)
+      (item.coalesceKey === `shopping:update:${coalesceSuffix}` ||
+        item.coalesceKey === `shopping:add:${coalesceSuffix}` ||
+        item.coalesceKey === `shopping:delete:${coalesceSuffix}` ||
+        (item.action === 'addShoppingItem' &&
+          (item.data?.id === itemId || item.data?.itemId === itemId)) ||
+        (item.action === 'updateShoppingItem' &&
+          (item.data?.id === itemId || item.data?.itemId === itemId)) ||
+        (item.action === 'deleteShoppingItem' &&
+          (item.data?.id === itemId || item.data?.itemId === itemId)))
   );
 }
 

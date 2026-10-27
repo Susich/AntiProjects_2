@@ -180,7 +180,7 @@ export const Header: React.FC = () => {
                 style={{ marginRight: 4 }}
               />
               <Text style={styles.roomCodeText}>
-                {currentParty.code}
+                Комната
               </Text>
             </TouchableOpacity>
 

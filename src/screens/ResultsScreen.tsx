@@ -61,11 +61,24 @@ export const ResultsScreen: React.FC<ResultsScreenProps> = ({
     showToast('Тусовка сохранена в архив Истории!', { type: 'success' });
   };
 
-  const handleToggleTransfer = (transfer: SimplifiedDebtTransfer) => {
+  const handleToggleTransfer = async (transfer: SimplifiedDebtTransfer) => {
+    const userId = session?.user.id;
+    if (userId !== transfer.fromUser.id && userId !== transfer.toUser.id) {
+      showToast('Отметить оплату может только должник или получатель', {
+        type: 'warning',
+      });
+      return;
+    }
     // Zustand updates and persists immediately; the queue sends the request in
     // the background. A later failure rolls the toggle back and shows a toast
     // from the queue.
-    void toggleTransferSettled(transfer);
+    const result = await toggleTransferSettled(transfer);
+    if (!result.success) {
+      showToast(result.error || 'Не удалось изменить статус перевода', {
+        type: 'error',
+      });
+      return;
+    }
     showToast(
       transfer.isSettled ? 'Перевод возвращён в ожидание' : 'Перевод отмечен оплаченным',
       { type: transfer.isSettled ? 'info' : 'success' }

@@ -39,11 +39,6 @@ import {
   hasPendingCloudWrites,
   hydrateOfflineQueue,
 } from './src/api/cloudQueue';
-import {
-  checkForAppUpdate,
-  UpdateCheckResult,
-} from './src/services/updateService';
-import { UpdateModal } from './src/components/update/UpdateModal';
 
 function MainApp() {
   const { theme } = useTheme();
@@ -55,9 +50,6 @@ function MainApp() {
 
   const [currentTab, setCurrentTab] = useState<TabId>('party');
   const initNotifications = useNotificationStore((s) => s.init);
-
-  const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
-  const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
 
   // Poll the shared Google Sheets room so other devices' changes show up.
   useCloudAutoSync();
@@ -122,23 +114,6 @@ function MainApp() {
     return () => {
       sub.remove();
     };
-  }, []);
-
-  // Check for updates automatically upon app launch
-  useEffect(() => {
-    const timer = setTimeout(async () => {
-      try {
-        const res = await checkForAppUpdate();
-        if (res.hasUpdate) {
-          setUpdateInfo(res);
-          setIsUpdateModalOpen(true);
-        }
-      } catch {
-        // Silent fail on auto-check
-      }
-    }, 2800);
-
-    return () => clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -247,13 +222,6 @@ function MainApp() {
             </>
           )}
         </SafeAreaView>
-
-        {/* In-App Update Modal */}
-        <UpdateModal
-          visible={isUpdateModalOpen}
-          onClose={() => setIsUpdateModalOpen(false)}
-          updateInfo={updateInfo}
-        />
       </View>
     </ToastProvider>
   );

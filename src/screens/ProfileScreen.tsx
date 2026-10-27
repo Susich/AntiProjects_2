@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Alert,
   ScrollView,
@@ -26,12 +26,7 @@ import {
   pickAvatarFromGallery,
   takeAvatarWithCamera,
 } from '../services/avatarService';
-import {
-  checkForAppUpdate,
-  CURRENT_APP_VERSION,
-  getCurrentAppVersion,
-  UpdateCheckResult,
-} from '../services/updateService';
+import { CURRENT_APP_VERSION } from '../services/updateService';
 
 interface SettingsRowProps {
   icon: keyof typeof Ionicons.glyphMap;
@@ -60,33 +55,9 @@ export const ProfileScreen: React.FC = () => {
   const [isShareOpen, setIsShareOpen] = useState(false);
 
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
-  const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null);
-  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
-  const [appVersion, setAppVersion] = useState(CURRENT_APP_VERSION);
 
-  useEffect(() => {
-    void getCurrentAppVersion().then((v) => setAppVersion(v));
-  }, []);
-
-  const handleManualCheckUpdate = async () => {
-    setIsCheckingUpdate(true);
-    try {
-      const res = await checkForAppUpdate();
-      setAppVersion(res.currentVersion);
-      setUpdateInfo(res);
-      if (res.hasUpdate) {
-        setIsUpdateModalOpen(true);
-      } else {
-        showToast(`У вас установлена последняя версия (v${res.currentVersion})`, {
-          type: 'success',
-          icon: 'checkmark-circle',
-        });
-      }
-    } catch {
-      showToast('Не удалось проверить наличие обновлений', { type: 'error' });
-    } finally {
-      setIsCheckingUpdate(false);
-    }
+  const openUpdateModal = () => {
+    setIsUpdateModalOpen(true);
   };
 
   const handlePickFromGallery = async () => {
@@ -320,11 +291,9 @@ export const ProfileScreen: React.FC = () => {
           })}
           {settingsRow({
             icon: 'cloud-download-outline',
-            title: 'Проверить обновления',
-            subtitle: isCheckingUpdate
-              ? 'Проверка новой версии на Google Диске...'
-              : `Версия v${appVersion} · Google Диск`,
-            onPress: handleManualCheckUpdate,
+            title: 'Обновить приложение',
+            subtitle: `Версия v${CURRENT_APP_VERSION} · Обновления через GitHub Releases`,
+            onPress: openUpdateModal,
           })}
           {settingsRow({
             icon: 'log-out-outline',
@@ -353,12 +322,7 @@ export const ProfileScreen: React.FC = () => {
       />
       <UpdateModal
         visible={isUpdateModalOpen}
-        onClose={() => {
-          setIsUpdateModalOpen(false);
-          void getCurrentAppVersion().then((v) => setAppVersion(v));
-        }}
-        updateInfo={updateInfo}
-        onVersionUpdated={(newVer) => setAppVersion(newVer)}
+        onClose={() => setIsUpdateModalOpen(false)}
       />
 
       {/* Avatar Action Sheet Modal */}

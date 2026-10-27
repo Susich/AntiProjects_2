@@ -30,9 +30,7 @@ import { BankPicker } from '../common/BankPicker';
 import { BottomSheetModal } from '../common/BottomSheetModal';
 import { useToast } from '../common/Toast';
 import { isNetworkOnline } from '../../services/networkService';
-import { RoomQrModal } from './RoomQrModal';
 import { QrScannerModal } from './QrScannerModal';
-import { sharePartyInvite } from '../../utils/partyInvite';
 
 type CloudTab = 'room' | 'create' | 'join';
 type BankAction = 'create' | 'join';
@@ -89,9 +87,7 @@ const CloudSyncContent: React.FC<{
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
-  const [isSharing, setIsSharing] = useState(false);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
-  const [isQrModalOpen, setIsQrModalOpen] = useState(false);
 
   const auth = session
     ? { userId: session.user.id, token: session.token }
@@ -107,7 +103,9 @@ const CloudSyncContent: React.FC<{
     if (!res.party) return;
     const participants = mapCloudParticipants(res);
     const expenses = mapCloudExpenses(res.expenses);
-    const shoppingList = res.shoppingList ? mapCloudShoppingList(res.shoppingList) : [];
+    const shoppingList = res.shoppingList
+      ? mapCloudShoppingList(res.shoppingList, res.party.id)
+      : [];
     const settledTransferIds = (res.paymentStatuses || [])
       .filter((status) => status.isPaid)
       .map((status) => status.transferId);
@@ -124,6 +122,8 @@ const CloudSyncContent: React.FC<{
       settledTransferIds,
       deletedExpenseIds: [],
       pendingExpenseIds: [],
+      // A new room must not inherit shopping tombstones from the previous one.
+      deletedShoppingItemIds: [],
     });
   };
 
@@ -356,22 +356,6 @@ const CloudSyncContent: React.FC<{
     </View>
   );
 
-  const handleShareParty = async () => {
-    if (isSharing || !currentParty.code) return;
-    setIsSharing(true);
-    try {
-      await sharePartyInvite({
-        partyCode: currentParty.code,
-        partyTitle: currentParty.title,
-        partyId: currentParty.id,
-      });
-    } catch {
-      showToast('Не удалось поделиться', { type: 'error' });
-    } finally {
-      setIsSharing(false);
-    }
-  };
-
   const renderRoom = () => {
     if (!currentParty.code) {
       return (
@@ -416,7 +400,7 @@ const CloudSyncContent: React.FC<{
             >
               <Ionicons
                 name={copiedCode ? 'checkmark-circle' : 'copy-outline'}
-                size={15}
+                size={16}
                 color={copiedCode ? theme.colors.success : theme.colors.primary}
               />
               <Text
@@ -426,27 +410,6 @@ const CloudSyncContent: React.FC<{
                 ]}
               >
                 {copiedCode ? 'Скопировано!' : 'Скопировать'}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.qrCodeButton}
-              onPress={() => setIsQrModalOpen(true)}
-              accessibilityRole="button"
-            >
-              <Ionicons name="qr-code-outline" size={15} color={theme.colors.neonCyan} />
-              <Text style={styles.qrCodeButtonText}>QR-код</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.shareButton}
-              onPress={handleShareParty}
-              disabled={isSharing}
-              accessibilityRole="button"
-            >
-              <Ionicons name="share-social-outline" size={15} color={theme.colors.primary} />
-              <Text style={styles.shareButtonText}>
-                {isSharing ? 'Загрузка...' : 'Поделиться'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -699,13 +662,6 @@ const CloudSyncContent: React.FC<{
         visible={isScannerOpen}
         onClose={() => setIsScannerOpen(false)}
         onScan={handleQrScanned}
-      />
-      <RoomQrModal
-        visible={isQrModalOpen}
-        onClose={() => setIsQrModalOpen(false)}
-        partyCode={currentParty.code || ''}
-        partyTitle={currentParty.title}
-        partyId={currentParty.id}
       />
     </KeyboardAvoidingView>
   );
@@ -996,16 +952,18 @@ function createStyles(theme: ThemeTokens) {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
-      gap: 8,
-      marginTop: 4,
-      flexWrap: 'wrap',
+      gap: 10,
+      marginTop: 6,
+      width: '100%',
     },
     copyCodeButton: {
+      flex: 1,
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 5,
+      justifyContent: 'center',
+      gap: 6,
+      paddingVertical: 10,
       paddingHorizontal: 12,
-      paddingVertical: 8,
       borderRadius: theme.borderRadius.full,
       backgroundColor: `${theme.colors.primary}12`,
       borderWidth: 1,
@@ -1017,39 +975,7 @@ function createStyles(theme: ThemeTokens) {
     },
     copyCodeText: {
       color: theme.colors.primary,
-      fontSize: 12,
-      fontWeight: '700',
-    },
-    qrCodeButton: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 5,
-      paddingHorizontal: 12,
-      paddingVertical: 8,
-      borderRadius: theme.borderRadius.full,
-      backgroundColor: `${theme.colors.neonCyan}12`,
-      borderWidth: 1,
-      borderColor: `${theme.colors.neonCyan}44`,
-    },
-    qrCodeButtonText: {
-      color: theme.colors.neonCyan,
-      fontSize: 12,
-      fontWeight: '700',
-    },
-    shareButton: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 5,
-      paddingHorizontal: 12,
-      paddingVertical: 8,
-      borderRadius: theme.borderRadius.full,
-      backgroundColor: `${theme.colors.primary}18`,
-      borderWidth: 1,
-      borderColor: `${theme.colors.primary}50`,
-    },
-    shareButtonText: {
-      color: theme.colors.primary,
-      fontSize: 12,
+      fontSize: 13,
       fontWeight: '700',
     },
     joinCodeRow: {

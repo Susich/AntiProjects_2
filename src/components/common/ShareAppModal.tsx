@@ -13,6 +13,7 @@ import { Button } from './Button';
 import { useToast } from './Toast';
 import { copyToClipboard } from '../../utils/clipboard';
 import { triggerImpact } from '../../utils/haptics';
+import { APP_DOWNLOAD_URL } from '../../config/github';
 
 interface ShareAppModalProps {
   visible: boolean;
@@ -21,9 +22,8 @@ interface ShareAppModalProps {
   partyTitle?: string;
 }
 
-// Permanent direct download link for the app APK
-export const APP_DOWNLOAD_URL =
-  'https://drive.google.com/file/d/1Xj-OHVMDlsZKlZfOqkJPza-RSejNJH4M/view?usp=sharing';
+// Public GitHub Releases page that always points to the latest APK build.
+export { APP_DOWNLOAD_URL };
 
 export const ShareAppModal: React.FC<ShareAppModalProps> = ({
   visible,

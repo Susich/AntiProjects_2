@@ -1,73 +1,16 @@
 import { Linking, Platform } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Application from 'expo-application';
-import { DEFAULT_GOOGLE_SCRIPT_URL, getGoogleScriptUrl } from '../api/googleSheets';
+import {
+  APP_DOWNLOAD_URL,
+  GITHUB_LATEST_RELEASE_API_URL,
+  GITHUB_LATEST_RELEASE_URL,
+  GITHUB_OWNER,
+  GITHUB_REPO,
+  IS_GITHUB_REPO_CONFIGURED,
+} from '../config/github';
 import { CURRENT_APP_VERSION } from '../config/version';
-import { compareVersions, isUpdateAvailable, parseSemver } from '../utils/semver';
+import { isUpdateAvailable } from '../utils/semver';
 
-export { CURRENT_APP_VERSION, compareVersions, isUpdateAvailable, parseSemver };
-export const DEFAULT_GOOGLE_DRIVE_APK_FILE_ID = '1Xj-OHVMDlsZKlZfOqkJPza-RSejNJH4M';
-export const LAST_UPDATE_CHECK_KEY = '@partysplit:last_update_check';
-export const DISMISSED_UPDATE_VERSION_KEY = '@partysplit:dismissed_update_version';
-export const INSTALLED_APP_VERSION_KEY = '@partysplit:installed_version';
-
-/**
- * Returns current installed app version from the single source of truth configuration.
- */
-export async function getCurrentAppVersion(): Promise<string> {
-  let highest = CURRENT_APP_VERSION;
-
-  try {
-    const saved = await AsyncStorage.getItem(INSTALLED_APP_VERSION_KEY);
-    if (saved && typeof saved === 'string' && compareVersions(saved, highest) > 0) {
-      highest = saved;
-    }
-  } catch {
-    // Ignore storage errors
-  }
-
-  try {
-    const nativeVer = Application.nativeApplicationVersion;
-    if (nativeVer && typeof nativeVer === 'string' && /^\d+\.\d+/.test(nativeVer)) {
-      if (compareVersions(nativeVer, highest) > 0) {
-        highest = nativeVer;
-      }
-    }
-  } catch {
-    // Ignore in unsupported environments (e.g. web or dev client)
-  }
-
-  return highest;
-}
-
-export async function markVersionAsInstalled(version: string): Promise<void> {
-  try {
-    await AsyncStorage.setItem(INSTALLED_APP_VERSION_KEY, version);
-  } catch (err) {
-    console.warn('[UpdateService] Failed to save installed version:', err);
-  }
-}
-
-export interface VersionConfig {
-  latestVersion: string;
-  apkUrl: string;
-  googleDriveFileId?: string;
-  releaseNotes?: string;
-  forceUpdate?: boolean;
-  minSupportedVersion?: string;
-  publishedAt?: string;
-  fileSizeMb?: number;
-}
-
-export interface UpdateCheckResult {
-  hasUpdate: boolean;
-  currentVersion: string;
-  latestVersion: string;
-  apkUrl: string;
-  releaseNotes?: string;
-  fileSizeMb?: number;
-  config: VersionConfig;
-}
+export { CURRENT_APP_VERSION, APP_DOWNLOAD_URL, GITHUB_LATEST_RELEASE_URL };
 
 export type DownloadProgressCallback = (
   progress: number,
@@ -75,151 +18,217 @@ export type DownloadProgressCallback = (
   totalBytes: number
 ) => void;
 
-/**
- * Converts any Google Drive shareable URL, preview URL or file ID
- * into a direct APK download link that bypasses viewer screens.
- */
-export function formatGoogleDriveDirectUrl(urlOrId: string): string {
-  if (!urlOrId) {
-    return `https://drive.usercontent.google.com/download?id=${DEFAULT_GOOGLE_DRIVE_APK_FILE_ID}&export=download&confirm=t`;
-  }
+export interface GitHubReleaseAsset {
+  name: string;
+  browser_download_url: string;
+  size?: number;
+  content_type?: string;
+}
 
-  // Already a direct usercontent link
-  if (urlOrId.includes('drive.usercontent.google.com/download')) {
-    return urlOrId.includes('confirm=t') ? urlOrId : `${urlOrId}&confirm=t`;
-  }
+export interface GitHubRelease {
+  tag_name: string;
+  name?: string;
+  body?: string;
+  html_url?: string;
+  published_at?: string;
+  draft?: boolean;
+  prerelease?: boolean;
+  assets?: GitHubReleaseAsset[];
+}
 
-  // Already a google drive export download link
-  if (urlOrId.includes('drive.google.com/uc?export=download')) {
-    return urlOrId;
-  }
+export interface LatestReleaseInfo {
+  /** Version without the leading `v`, e.g. "1.0.6". */
+  version: string;
+  releaseName?: string;
+  notes: string;
+  apkUrl: string;
+  apkName: string;
+  apkSize: number;
+  releaseUrl: string;
+  publishedAt?: string;
+}
 
-  // Extract ID from various formats
-  let fileId = '';
-  const idParamMatch = urlOrId.match(/[?&]id=([a-zA-Z0-9_-]+)/);
-  const fileDMatch = urlOrId.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
-  const dMatch = urlOrId.match(/\/d\/([a-zA-Z0-9_-]+)/);
+export type UpdateCheckResult =
+  | {
+      status: 'update';
+      currentVersion: string;
+      latest: LatestReleaseInfo;
+    }
+  | {
+      status: 'latest';
+      currentVersion: string;
+      latest: LatestReleaseInfo;
+    }
+  | {
+      status: 'error';
+      currentVersion: string;
+      error: string;
+    };
 
-  if (idParamMatch && idParamMatch[1]) {
-    fileId = idParamMatch[1];
-  } else if (fileDMatch && fileDMatch[1]) {
-    fileId = fileDMatch[1];
-  } else if (dMatch && dMatch[1]) {
-    fileId = dMatch[1];
-  } else if (/^[a-zA-Z0-9_-]{20,}$/.test(urlOrId.trim())) {
-    fileId = urlOrId.trim();
-  }
+function normalizeVersion(tag: string): string {
+  return String(tag || '').trim().replace(/^[vV]/, '');
+}
 
-  if (fileId) {
-    return `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=t`;
-  }
-
-  return urlOrId;
+function findApkAsset(
+  assets: GitHubReleaseAsset[] | undefined
+): GitHubReleaseAsset | undefined {
+  if (!Array.isArray(assets)) return undefined;
+  return assets.find((asset) => {
+    const name = String(asset?.name || '').toLowerCase();
+    return Boolean(asset?.browser_download_url) && name.endsWith('.apk');
+  });
 }
 
 /**
- * Checks for updates by querying the version config from Google Apps Script / Google Sheets.
+ * Loads the latest published release from GitHub. Drafts and prereleases are
+ * ignored by the `releases/latest` endpoint itself.
  */
-export async function checkForAppUpdate(): Promise<UpdateCheckResult> {
-  const currentVersion = await getCurrentAppVersion();
-  const scriptUrl = (await getGoogleScriptUrl()) || DEFAULT_GOOGLE_SCRIPT_URL;
+export async function fetchLatestGitHubRelease(): Promise<{
+  success: boolean;
+  release?: LatestReleaseInfo;
+  error?: string;
+}> {
+  if (!IS_GITHUB_REPO_CONFIGURED || !GITHUB_LATEST_RELEASE_API_URL) {
+    return {
+      success: false,
+      error:
+        'Не настроен репозиторий GitHub. Укажите владельца и название репозитория в src/config/github.ts (или в EXPO_PUBLIC_GITHUB_OWNER / EXPO_PUBLIC_GITHUB_REPO).',
+    };
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 12000);
 
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 9000);
-
-    const queryUrl = `${scriptUrl}${
-      scriptUrl.includes('?') ? '&' : '?'
-    }action=getLatestVersion&_ts=${Date.now()}`;
-
-    const res = await fetch(queryUrl, {
+    const response = await fetch(GITHUB_LATEST_RELEASE_API_URL, {
       method: 'GET',
-      headers: { Accept: 'application/json' },
+      headers: {
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
       signal: controller.signal,
     });
-    clearTimeout(timeout);
+    clearTimeout(timeoutId);
 
-    if (res.ok) {
-      const data = await res.json();
-      if (data && data.latestVersion) {
-        const config: VersionConfig = {
-          latestVersion: data.latestVersion,
-          apkUrl: formatGoogleDriveDirectUrl(data.apkUrl || data.googleDriveFileId),
-          googleDriveFileId: data.googleDriveFileId || DEFAULT_GOOGLE_DRIVE_APK_FILE_ID,
-          releaseNotes:
-            data.releaseNotes ||
-            'Исправление синхронизации и багов верстки',
-          minSupportedVersion: data.minSupportedVersion || '1.0.0',
-          fileSizeMb: data.fileSizeMb || 42,
-          publishedAt: data.publishedAt,
-        };
-
-        const hasUpdate = isUpdateAvailable(config.latestVersion, currentVersion);
-        await AsyncStorage.setItem(LAST_UPDATE_CHECK_KEY, Date.now().toString());
-
-        return {
-          hasUpdate,
-          currentVersion,
-          latestVersion: config.latestVersion,
-          apkUrl: config.apkUrl,
-          releaseNotes: config.releaseNotes,
-          fileSizeMb: config.fileSizeMb,
-          config,
-        };
-      }
+    if (response.status === 404) {
+      return {
+        success: false,
+        error: `В репозитории ${GITHUB_OWNER}/${GITHUB_REPO} пока нет опубликованных релизов.`,
+      };
     }
-  } catch (err) {
-    console.warn('[UpdateService] Version check network warning:', err);
+    if (response.status === 403 || response.status === 429) {
+      return {
+        success: false,
+        error: 'GitHub временно ограничил количество запросов. Попробуйте позже.',
+      };
+    }
+    if (!response.ok) {
+      return {
+        success: false,
+        error: `GitHub вернул ошибку ${response.status}. Попробуйте позже.`,
+      };
+    }
+
+    const raw = (await response.json()) as GitHubRelease;
+    const version = normalizeVersion(raw.tag_name);
+    if (!version) {
+      return { success: false, error: 'В последнем релизе GitHub не указана версия (tag).' };
+    }
+
+    const apkAsset = findApkAsset(raw.assets);
+
+    return {
+      success: true,
+      release: {
+        version,
+        releaseName: raw.name ? String(raw.name) : undefined,
+        notes: raw.body ? String(raw.body) : '',
+        apkUrl: apkAsset ? apkAsset.browser_download_url : '',
+        apkName: apkAsset ? apkAsset.name : '',
+        apkSize: apkAsset ? Number(apkAsset.size) || 0 : 0,
+        releaseUrl:
+          raw.html_url ||
+          `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/tag/${raw.tag_name}`,
+        publishedAt: raw.published_at ? String(raw.published_at) : undefined,
+      },
+    };
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err?.name === 'AbortError') {
+      return { success: false, error: 'Превышено время ожидания ответа GitHub (12s)' };
+    }
+    return {
+      success: false,
+      error: err?.message
+        ? `Не удалось проверить обновления: ${err.message}`
+        : 'Не удалось проверить обновления на GitHub',
+    };
+  }
+}
+
+/**
+ * Compares the latest GitHub release with the installed app version using
+ * strict semantic versioning.
+ */
+export async function checkForUpdate(): Promise<UpdateCheckResult> {
+  const result = await fetchLatestGitHubRelease();
+  if (!result.success || !result.release) {
+    return {
+      status: 'error',
+      currentVersion: CURRENT_APP_VERSION,
+      error: result.error || 'Не удалось проверить обновления',
+    };
   }
 
-  // Safe fallback default config
-  const fallbackConfig: VersionConfig = {
-    latestVersion: '1.0.5',
-    apkUrl: formatGoogleDriveDirectUrl(DEFAULT_GOOGLE_DRIVE_APK_FILE_ID),
-    googleDriveFileId: DEFAULT_GOOGLE_DRIVE_APK_FILE_ID,
-    releaseNotes: 'Исправление синхронизации и багов верстки',
-    fileSizeMb: 42,
-  };
+  const needsUpdate = isUpdateAvailable(
+    result.release.version,
+    CURRENT_APP_VERSION
+  );
 
-  const hasUpdate = isUpdateAvailable(fallbackConfig.latestVersion, currentVersion);
+  if (needsUpdate && !result.release.apkUrl) {
+    return {
+      status: 'error',
+      currentVersion: CURRENT_APP_VERSION,
+      error: `В релизе v${result.release.version} нет APK-файла. Прикрепите .apk к релизу на GitHub.`,
+    };
+  }
 
   return {
-    hasUpdate,
-    currentVersion,
-    latestVersion: fallbackConfig.latestVersion,
-    apkUrl: fallbackConfig.apkUrl,
-    releaseNotes: fallbackConfig.releaseNotes,
-    fileSizeMb: fallbackConfig.fileSizeMb,
-    config: fallbackConfig,
+    status: needsUpdate ? 'update' : 'latest',
+    currentVersion: CURRENT_APP_VERSION,
+    latest: result.release,
   };
 }
 
 /**
- * Downloads the APK with progress reporting and initiates the native Android installer.
+ * Downloads an APK with progress reporting and opens the native Android
+ * package installer. GitHub asset URLs redirect to a CDN; the downloader
+ * follows redirects automatically.
  */
 export async function downloadAndInstallApk(
   apkUrl: string,
   onProgress?: DownloadProgressCallback,
-  targetVersion?: string
+  fileName?: string
 ): Promise<{ success: boolean; error?: string }> {
-  const directUrl = formatGoogleDriveDirectUrl(apkUrl);
+  if (!apkUrl) {
+    return { success: false, error: 'Ссылка на APK не найдена' };
+  }
 
-  // Web fallback: triggers native browser download
+  // Web/iOS fallback: let the system browser handle the download.
   if (Platform.OS === 'web') {
     if (typeof window !== 'undefined') {
-      window.open(directUrl, '_blank');
+      window.open(apkUrl, '_blank');
       return { success: true };
     }
     return { success: false, error: 'Не удалось запустить загрузку в браузере' };
   }
 
   if (Platform.OS !== 'android') {
-    await Linking.openURL(directUrl);
+    await Linking.openURL(apkUrl);
     return { success: true };
   }
 
   try {
-    // Dynamic import to support Expo SDK 58
     const FileSystem = await import('expo-file-system/legacy');
     const IntentLauncher = await import('expo-intent-launcher');
 
@@ -228,12 +237,19 @@ export async function downloadAndInstallApk(
       throw new Error('Локальное хранилище недоступно');
     }
 
-    const localApkPath = `${downloadDir}partysplit_update_${Date.now()}.apk`;
+    const safeName = String(fileName || `partysplit_${CURRENT_APP_VERSION}.apk`)
+      .replace(/[^a-zA-Z0-9._-]/g, '_')
+      .replace(/\.apk$/i, '');
+    const localApkPath = `${downloadDir}${safeName}_${Date.now()}.apk`;
 
     const downloadResumable = FileSystem.createDownloadResumable(
-      directUrl,
+      apkUrl,
       localApkPath,
-      {},
+      {
+        headers: {
+          Accept: 'application/octet-stream',
+        },
+      },
       (downloadProgress) => {
         const total = downloadProgress.totalBytesExpectedToWrite;
         const written = downloadProgress.totalBytesWritten;
@@ -246,26 +262,22 @@ export async function downloadAndInstallApk(
 
     const downloadResult = await downloadResumable.downloadAsync();
     if (!downloadResult || !downloadResult.uri) {
-      throw new Error('Файл не был успешно сохранен на устройство');
+      throw new Error('Файл не был успешно сохранён на устройство');
     }
 
     if (onProgress) {
       onProgress(1, 100, 100);
     }
 
-    // Convert file:// to content:// URI using Expo's FileProvider
+    // Convert file:// to content:// URI using Expo's FileProvider.
     const contentUri = await FileSystem.getContentUriAsync(downloadResult.uri);
 
-    // Launch Android Package Installer via VIEW Intent
+    // Launch Android Package Installer via VIEW Intent.
     await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
       data: contentUri,
       flags: 1, // Intent.FLAG_GRANT_READ_URI_PERMISSION
       type: 'application/vnd.android.package-archive',
     });
-
-    if (targetVersion) {
-      await markVersionAsInstalled(targetVersion);
-    }
 
     return { success: true };
   } catch (err: any) {

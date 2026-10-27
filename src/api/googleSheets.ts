@@ -130,7 +130,21 @@ function asBoolean(value: unknown): boolean {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'number') return value !== 0;
   const text = asString(value).toLowerCase();
-  return text === 'true' || text === '1' || text === 'yes';
+  return text === 'true' || text === '1' || text === 'yes' || text === 'да';
+}
+
+/**
+ * Sheets often returns numbers as localized strings ("1 200,50"). Parse those
+ * defensively while keeping "field is absent" distinct from a real zero.
+ */
+function asOptionalNumber(value: unknown): number | undefined {
+  if (value === null || value === undefined || value === '') return undefined;
+  const normalized =
+    typeof value === 'string'
+      ? value.replace(/\s+/g, '').replace(',', '.')
+      : value;
+  const numeric = typeof normalized === 'number' ? normalized : Number(normalized);
+  return Number.isFinite(numeric) ? numeric : undefined;
 }
 
 function asStringArray(value: unknown): string[] {
@@ -214,6 +228,32 @@ function normalizeTransferStatus(raw: unknown): CloudTransferStatus | null {
   };
 }
 
+function normalizeShoppingItem(raw: unknown): CloudShoppingItem | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const item = raw as Record<string, unknown>;
+  const id = asString(item.id);
+  if (!id) return null;
+
+  const estimatedAmount = asOptionalNumber(item.estimatedAmount);
+  const actualAmount = asOptionalNumber(item.actualAmount);
+
+  return {
+    id,
+    partyId: asString(item.partyId),
+    title: asString(item.title) || 'Покупка',
+    estimatedAmount:
+      estimatedAmount !== undefined && estimatedAmount > 0 ? estimatedAmount : undefined,
+    assignedUserId: asString(item.assignedUserId) || undefined,
+    isBought: asBoolean(item.isBought),
+    boughtById: asString(item.boughtById) || undefined,
+    actualAmount:
+      actualAmount !== undefined && actualAmount > 0 ? actualAmount : undefined,
+    convertedExpenseId: asString(item.convertedExpenseId) || undefined,
+    category: asString(item.category) || undefined,
+    createdAt: asString(item.createdAt) || undefined,
+  };
+}
+
 function normalizeParty(raw: unknown): CloudParty | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const item = raw as Record<string, unknown>;
@@ -254,6 +294,13 @@ function normalizeApiResponse(json: unknown): PartyApiResponse {
         .map(normalizeTransferStatus)
         .filter(Boolean) as CloudTransferStatus[])
     : undefined;
+  // This is the shared shopping list shown in the room. It used to be dropped
+  // here, so cloud reads always looked like an empty list on every device.
+  const shoppingList = Array.isArray(raw.shoppingList)
+    ? (raw.shoppingList
+        .map(normalizeShoppingItem)
+        .filter(Boolean) as CloudShoppingItem[])
+    : undefined;
   const results = Array.isArray(raw.results)
     ? raw.results.map((entry) => normalizeApiResponse(entry))
     : undefined;
@@ -264,6 +311,7 @@ function normalizeApiResponse(json: unknown): PartyApiResponse {
     party: normalizeParty(raw.party),
     participants,
     expenses,
+    shoppingList,
     paymentStatuses,
     user: normalizeUser(raw.user),
     token: asString(raw.token) || undefined,
@@ -730,9 +778,16 @@ export async function setTransferStatusInCloud(
   return callAppsScriptApi('setTransferStatus', {
     partyId,
     roomId: partyId,
-    userId: status.fromUserId || auth.userId,
+    // `userId` is the authenticated actor, not the debtor. The backend checks
+    // that this user is either the debtor or the creditor before accepting the
+    // status change.
+    userId: auth.userId,
     token: auth.token,
-    ...status,
+    transferId: status.transferId,
+    fromUserId: status.fromUserId,
+    toUserId: status.toUserId,
+    amount: status.amount,
+    isPaid: status.isPaid,
   });
 }
 
@@ -1006,9 +1061,15 @@ export function queueSetTransferStatusInCloud(
     {
       partyId,
       roomId: partyId,
-      userId: status.fromUserId || auth.userId,
+      // The authenticated actor. Only the debtor or creditor may confirm a
+      // payment, and the backend validates that from this field.
+      userId: auth.userId,
       token: auth.token,
-      ...status,
+      transferId: status.transferId,
+      fromUserId: status.fromUserId,
+      toUserId: status.toUserId,
+      amount: status.amount,
+      isPaid: status.isPaid,
     },
     partyId,
     { ...rest, coalesceKey, debounceMs, priority, failureMessage }
@@ -1080,13 +1141,15 @@ export function queueUpdateShoppingItemToCloud(
   item: {
     id: string;
     title?: string;
-    estimatedAmount?: number;
-    assignedUserId?: string;
+    // Cleared optional fields are sent as explicit null: JSON.stringify drops
+    // undefined keys, and the backend keeps the sheet value for missing keys.
+    estimatedAmount?: number | null;
+    assignedUserId?: string | null;
     isBought?: boolean;
-    boughtById?: string;
-    actualAmount?: number;
-    convertedExpenseId?: string;
-    category?: string;
+    boughtById?: string | null;
+    actualAmount?: number | null;
+    convertedExpenseId?: string | null;
+    category?: string | null;
   },
   options: CloudMutationOptions = {}
 ): void {

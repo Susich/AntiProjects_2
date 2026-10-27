@@ -54,6 +54,21 @@ function asNumber(value: unknown): number {
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
+function asBoolean(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  const text = asString(value).toLowerCase();
+  return text === 'true' || text === '1' || text === 'yes' || text === 'да';
+}
+
+function asOptionalPositiveNumber(value: unknown): number | undefined {
+  if (value === null || value === undefined || value === '') return undefined;
+  const normalized =
+    typeof value === 'string' ? value.replace(/\s+/g, '').replace(',', '.') : value;
+  const numeric = typeof normalized === 'number' ? normalized : Number(normalized);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : undefined;
+}
+
 function asStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return Array.from(new Set(value.map(asString).filter(Boolean)));
@@ -222,34 +237,52 @@ function normalizeShoppingItem(raw: unknown): ShoppingItem | null {
   if (!id || !title) return null;
 
   const category = asString(item.category) as ItemCategory;
-  const estimatedAmount =
-    item.estimatedAmount !== undefined && item.estimatedAmount !== null && item.estimatedAmount !== ''
-      ? asNumber(item.estimatedAmount)
-      : undefined;
-  const actualAmount =
-    item.actualAmount !== undefined && item.actualAmount !== null && item.actualAmount !== ''
-      ? asNumber(item.actualAmount)
-      : undefined;
+  const estimatedAmount = asOptionalPositiveNumber(item.estimatedAmount);
+  const actualAmount = asOptionalPositiveNumber(item.actualAmount);
 
   return {
     id,
     title,
-    estimatedAmount: estimatedAmount && estimatedAmount > 0 ? estimatedAmount : undefined,
+    estimatedAmount,
     assignedUserId: asString(item.assignedUserId || item.assignedToId) || undefined,
-    isBought: Boolean(item.isBought),
+    // Sheets may store the boolean as the string "false" — Boolean("false")
+    // would incorrectly mark the item as bought.
+    isBought: asBoolean(item.isBought),
     boughtById: asString(item.boughtById) || undefined,
-    actualAmount: actualAmount && actualAmount > 0 ? actualAmount : undefined,
+    actualAmount,
     convertedExpenseId: asString(item.convertedExpenseId) || undefined,
     category: VALID_CATEGORIES.includes(category) ? category : undefined,
     createdAt: asString(item.createdAt) || new Date().toISOString(),
   };
 }
 
-function normalizeShoppingList(raw: unknown): ShoppingItem[] {
+function normalizeShoppingList(raw: unknown, partyId?: string): ShoppingItem[] {
   if (!Array.isArray(raw)) return [];
-  return raw
-    .map(normalizeShoppingItem)
-    .filter((item): item is ShoppingItem => Boolean(item));
+  // Defensive id de-duplication: snapshots saved by older builds could carry
+  // duplicated rows nearby-read from a corrupted sheet. The newest variant
+  // (by createdAt, then position) reflects the latest intent.
+  const byId = new Map<string, ShoppingItem>();
+  const result: ShoppingItem[] = [];
+  for (const entry of raw) {
+    // Ignore rows that explicitly belong to another room.
+    if (entry && typeof entry === 'object') {
+      const entryPartyId = asString((entry as Record<string, unknown>).partyId);
+      if (partyId && entryPartyId && entryPartyId !== partyId) continue;
+    }
+    const item = normalizeShoppingItem(entry);
+    if (!item) continue;
+    const prev = byId.get(item.id);
+    if (prev) {
+      const prevMs = Date.parse(prev.createdAt || '') || 0;
+      const nextMs = Date.parse(item.createdAt || '') || 0;
+      if (nextMs < prevMs) continue;
+      result.splice(result.indexOf(prev), 1, item);
+    } else {
+      result.push(item);
+    }
+    byId.set(item.id, item);
+  }
+  return result;
 }
 
 function normalizePartyEvent(
@@ -262,6 +295,7 @@ function normalizePartyEvent(
   const participantsSource = Array.isArray(item.participants) ? item.participants : [];
   const seen = new Set<string>();
   const participants: UserProfile[] = [];
+  const partyId = asString(item.id) || fallbackId || `party_${Date.now()}`;
 
   participantsSource.forEach((entry: unknown) => {
     let user: UserProfile | null = null;
@@ -288,17 +322,18 @@ function normalizePartyEvent(
   });
 
   return {
-    id: asString(item.id) || fallbackId || `party_${Date.now()}`,
+    id: partyId,
     code: asString(item.code).toUpperCase() || undefined,
     title: asString(item.title) || 'Тусовка',
     date: asString(item.date) || new Date().toISOString(),
     createdBy: asString(item.createdBy) || undefined,
     participants,
     expenses: normalizeExpenses(item.expenses),
-    shoppingList: normalizeShoppingList(item.shoppingList),
+    shoppingList: normalizeShoppingList(item.shoppingList, partyId),
     settledTransferIds: asStringArray(item.settledTransferIds),
     deletedExpenseIds: asStringArray(item.deletedExpenseIds),
     pendingExpenseIds: asStringArray(item.pendingExpenseIds),
+    deletedShoppingItemIds: asStringArray(item.deletedShoppingItemIds),
   };
 }
 
@@ -350,6 +385,7 @@ function createDefaultParty(): PartyEvent {
     settledTransferIds: [],
     deletedExpenseIds: [],
     pendingExpenseIds: [],
+    deletedShoppingItemIds: [],
   };
 }
 
@@ -395,6 +431,7 @@ function partySignature(party: PartyEvent): string {
     settledTransferIds: (party.settledTransferIds || []).slice().sort(),
     deletedExpenseIds: (party.deletedExpenseIds || []).slice().sort(),
     pendingExpenseIds: (party.pendingExpenseIds || []).slice().sort(),
+    deletedShoppingItemIds: (party.deletedShoppingItemIds || []).slice().sort(),
   });
 }
 
@@ -463,6 +500,8 @@ interface PartyState {
   syncPartyFromCloud: (partyData: Partial<PartyEvent>) => void;
   syncWithCloud: (options?: {
     background?: boolean;
+    /** Force a network read, bypassing the short-lived read cache. */
+    forceRefresh?: boolean;
   }) => Promise<{ success: boolean; error?: string; stale?: boolean }>;
   resetParty: () => void;
   leaveParty: () => Promise<{ success: boolean; error?: string }>;
@@ -473,7 +512,9 @@ interface PartyState {
     amount: number,
     paidById: string,
     splitUserIds: string[],
-    category?: ItemCategory
+    category?: ItemCategory,
+    expenseId?: string,
+    onFailure?: () => void
   ) => ExpenseItem | null;
   updateExpense: (id: string, updates: Partial<ExpenseItem>) => void;
   removeExpense: (id: string) => void;
@@ -745,6 +786,8 @@ export const usePartyStore = create<PartyState>((set, get) => ({
             partyData.settledTransferIds ?? current.settledTransferIds,
           deletedExpenseIds: partyData.deletedExpenseIds ?? current.deletedExpenseIds,
           pendingExpenseIds: partyData.pendingExpenseIds ?? current.pendingExpenseIds,
+          deletedShoppingItemIds:
+            partyData.deletedShoppingItemIds ?? current.deletedShoppingItemIds,
         },
         current.id
       ) || current;
@@ -956,13 +999,27 @@ export const usePartyStore = create<PartyState>((set, get) => ({
       auth,
       {
         // Auto-sync keeps the existing UI on screen and revalidates in the
-        // background. A manual pull-to-refresh always goes to the network.
-        forceRefresh: !options?.background,
+        // background. A manual pull-to-refresh (or returning to the app) always
+        // goes to the network.
+        forceRefresh: Boolean(options?.forceRefresh) || !options?.background,
         allowStale: Boolean(options?.background),
       }
     );
     if (!res.success || !res.party) {
       return { success: false, error: res.error || 'Ошибка синхронизации с Google Sheets' };
+    }
+
+    // A stale fallback means the fresh read failed (network/quota/timeout).
+    // Applying it to the store would roll the UI back to an older snapshot —
+    // the exact "список не обновляется, хотя в таблице есть изменения"
+    // symptom. The hydrated store state is already fresher, so stale data is
+    // never adopted; the hook just backs off and retries.
+    if (res.stale) {
+      return {
+        success: false,
+        stale: true,
+        error: 'Не удалось получить свежие данные из Google Sheets',
+      };
     }
 
     // A new optimistic write may have been queued/committed while the read was
@@ -1042,6 +1099,15 @@ export const usePartyStore = create<PartyState>((set, get) => ({
           priority: -8,
         });
       }
+      // Shopping deletions are retried the same way: while the sheet still
+      // contains the deleted row, keep sending deleteShoppingItem.
+      for (const deletedItemId of merged.party.deletedShoppingItemIds || []) {
+        queueDeleteShoppingItemFromCloud(deletedItemId, currentParty.id, auth, {
+          silent: true,
+          debounceMs: 0,
+          priority: -8,
+        });
+      }
     }
 
     return { success: true, stale: res.stale };
@@ -1106,7 +1172,15 @@ export const usePartyStore = create<PartyState>((set, get) => ({
     return { success: true };
   },
 
-  addExpense: (title, amount, paidById, splitUserIds, category = 'food') => {
+  addExpense: (
+    title,
+    amount,
+    paidById,
+    splitUserIds,
+    category = 'food',
+    expenseId,
+    onFailure
+  ) => {
     const trimmedTitle = title.trim();
     if (!trimmedTitle || amount <= 0) return null;
 
@@ -1121,8 +1195,11 @@ export const usePartyStore = create<PartyState>((set, get) => ({
     );
     if (validSplitIds.length === 0) return null;
 
+    // The backend treats addExpense as idempotent by id, so a caller-provided
+    // id makes a conversion safe when two devices convert the same shopping
+    // item while their view is briefly out of sync.
     const newExpense: ExpenseItem = {
-      id: `expense_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      id: expenseId?.trim() || `expense_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       title: trimmedTitle,
       amount: Number(amount),
       paidById,
@@ -1169,6 +1246,7 @@ export const usePartyStore = create<PartyState>((set, get) => ({
             const latest = get().currentParty;
             if (latest.id !== updatedParty.id) return;
             if (!(latest.expenses || []).some((expense) => expense.id === newExpense.id)) {
+              onFailure?.();
               return;
             }
             const reverted: PartyEvent = {
@@ -1182,6 +1260,7 @@ export const usePartyStore = create<PartyState>((set, get) => ({
             };
             set({ currentParty: reverted });
             void saveItem(STORAGE_KEYS.CURRENT_PARTY, reverted);
+            onFailure?.();
           },
         }
       );
@@ -1436,20 +1515,55 @@ export const usePartyStore = create<PartyState>((set, get) => ({
 
     const session = get().session;
     if (updatedParty.code && session) {
+      // IMPORTANT: send only the fields this edit actually changed. Both users
+      // write full rows through one Google Sheet with last-write-wins per row,
+      // so sending the whole object always overwrote another user's concurrent
+      // changes (e.g. their claim got reverted by an unrelated title edit).
+      // Cleared optional fields are sent as explicit `null`: `undefined` keys
+      // are dropped by JSON.stringify, and the backend treats a missing key as
+      // "keep the existing sheet value", which silently resurrected old data.
+      const prevItem = currentItems[existingIndex];
+      const payload: {
+        id: string;
+        title?: string;
+        estimatedAmount?: number | null;
+        assignedUserId?: string | null;
+        isBought?: boolean;
+        boughtById?: string | null;
+        actualAmount?: number | null;
+        convertedExpenseId?: string | null;
+        category?: string | null;
+      } = { id: updatedItem.id };
+
+      if (updatedItem.title !== prevItem.title) {
+        payload.title = updatedItem.title;
+      }
+      if ((updatedItem.estimatedAmount ?? null) !== (prevItem.estimatedAmount ?? null)) {
+        payload.estimatedAmount = updatedItem.estimatedAmount ?? null;
+      }
+      if ((updatedItem.assignedUserId ?? null) !== (prevItem.assignedUserId ?? null)) {
+        payload.assignedUserId = updatedItem.assignedUserId ?? null;
+      }
+      if ((updatedItem.isBought ? 1 : 0) !== (prevItem.isBought ? 1 : 0)) {
+        payload.isBought = updatedItem.isBought;
+      }
+      if ((updatedItem.boughtById ?? null) !== (prevItem.boughtById ?? null)) {
+        payload.boughtById = updatedItem.boughtById ?? null;
+      }
+      if ((updatedItem.actualAmount ?? null) !== (prevItem.actualAmount ?? null)) {
+        payload.actualAmount = updatedItem.actualAmount ?? null;
+      }
+      if ((updatedItem.convertedExpenseId ?? null) !== (prevItem.convertedExpenseId ?? null)) {
+        payload.convertedExpenseId = updatedItem.convertedExpenseId ?? null;
+      }
+      if ((updatedItem.category ?? null) !== (prevItem.category ?? null)) {
+        payload.category = updatedItem.category ?? null;
+      }
+
       queueUpdateShoppingItemToCloud(
         updatedParty.id,
         { userId: session.user.id, token: session.token },
-        {
-          id: updatedItem.id,
-          title: updatedItem.title,
-          estimatedAmount: updatedItem.estimatedAmount,
-          assignedUserId: updatedItem.assignedUserId,
-          isBought: updatedItem.isBought,
-          boughtById: updatedItem.boughtById,
-          actualAmount: updatedItem.actualAmount,
-          convertedExpenseId: updatedItem.convertedExpenseId,
-          category: updatedItem.category,
-        }
+        payload
       );
       flushOfflineQueue();
     }
@@ -1469,6 +1583,12 @@ export const usePartyStore = create<PartyState>((set, get) => ({
     const updatedParty: PartyEvent = {
       ...currentParty,
       shoppingList: updatedShoppingList,
+      // Remember the deletion until Google Sheets confirms it: a queued update
+      // or a stale poll snapshot must not resurrect the row (backend appends a
+      // new row for unknown ids otherwise).
+      deletedShoppingItemIds: Array.from(
+        new Set([...(currentParty.deletedShoppingItemIds || []), id])
+      ),
     };
 
     set({ currentParty: updatedParty });
@@ -1504,12 +1624,46 @@ export const usePartyStore = create<PartyState>((set, get) => ({
     const item = (currentParty.shoppingList || []).find((s) => s.id === id);
     if (!item) return null;
 
+    // Two devices may convert the same item while polling briefly lags behind
+    // (~4s). A deterministic expense id derived from the shopping item makes
+    // both requests create one shared expense: the backend addExpense handler
+    // is idempotent by id and simply returns the existing row.
+    const sharedExpenseId = `expense_shop_${item.id}`;
+
+    const existingLinked = (currentParty.expenses || []).find(
+      (e) => e.id === sharedExpenseId || (item.convertedExpenseId && e.id === item.convertedExpenseId)
+    );
+    if (existingLinked) {
+      // Someone (possibly the same user, double tap) already converted it.
+      // Confirm the bought state so the row cannot drift back to "not bought".
+      get().updateShoppingItem(id, {
+        isBought: true,
+        boughtById: item.boughtById || paidById,
+        convertedExpenseId: existingLinked.id,
+      });
+      return existingLinked;
+    }
+
     const newExpense = get().addExpense(
       item.title,
       actualAmount,
       paidById,
       splitUserIds,
-      item.category || 'food'
+      item.category || 'food',
+      sharedExpenseId,
+      () => {
+        // The expense write failed permanently: revert the shopping row too,
+        // otherwise it stays "Куплено и в чеке" pointing at a missing expense.
+        const latest = get().currentParty;
+        const latestItem = (latest.shoppingList || []).find((s) => s.id === id);
+        if (!latestItem || latestItem.convertedExpenseId !== sharedExpenseId) return;
+        get().updateShoppingItem(id, {
+          isBought: false,
+          boughtById: undefined,
+          actualAmount: undefined,
+          convertedExpenseId: undefined,
+        });
+      }
     );
     if (!newExpense) return null;
 
@@ -1542,6 +1696,24 @@ export const usePartyStore = create<PartyState>((set, get) => ({
 
   toggleTransferSettled: async (transfer) => {
     const currentParty = get().currentParty;
+    const { session } = get();
+    if (!session) {
+      return { success: false, error: 'Требуется авторизация' };
+    }
+
+    // Only the debtor and the creditor of this exact transfer may confirm (or
+    // revoke) the payment. Other room members can see the status but not edit.
+    const currentUserId = session.user.id;
+    if (
+      currentUserId !== transfer.fromUser.id &&
+      currentUserId !== transfer.toUser.id
+    ) {
+      return {
+        success: false,
+        error: 'Отметить оплату может только должник или получатель',
+      };
+    }
+
     const currentSettled = currentParty.settledTransferIds || [];
     const wasSettled = currentSettled.includes(transfer.id);
     const nextPaid = !wasSettled;
@@ -1576,22 +1748,10 @@ export const usePartyStore = create<PartyState>((set, get) => ({
     state.pending += 1;
     transferUpdateStates.set(stateKey, state);
 
-    const { session } = get();
-    if (!updatedParty.code || !session) {
+    if (!updatedParty.code) {
       state.pending -= 1;
       if (state.pending <= 0) transferUpdateStates.delete(stateKey);
-      if (!updatedParty.code) return { success: true };
-      // No cloud room / session race: undo the optimistic toggle immediately.
-      const latest = get().currentParty;
-      if (latest.id === updatedParty.id) {
-        const reverted: PartyEvent = {
-          ...latest,
-          settledTransferIds: currentSettled,
-        };
-        set({ currentParty: reverted });
-        void saveItem(STORAGE_KEYS.CURRENT_PARTY, reverted);
-      }
-      return { success: false, error: 'Требуется авторизация' };
+      return { success: true };
     }
 
     // The UI is already updated; this promise resolves immediately. The queue

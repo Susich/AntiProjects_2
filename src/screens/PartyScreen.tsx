@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -51,6 +51,21 @@ export const PartyScreen: React.FC<PartyScreenProps> = ({ onNavigateToResults })
   const [convertingShoppingItem, setConvertingShoppingItem] = useState<ShoppingItem | null>(null);
 
   const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // The screen is mounted every time the user opens the "Чек и траты" tab, so
+  // this is the focus refresh. It is coalesced with the global 4s poll, which
+  // means it never creates a second polling loop.
+  useEffect(() => {
+    if (!currentParty.code) return;
+    void syncWithCloud({ background: true, forceRefresh: true });
+  }, [currentParty.code, syncWithCloud]);
+
+  // Opening the shopping list is a strong hint that another participant may
+  // have changed it. Force a fresh read instead of waiting for the next poll.
+  useEffect(() => {
+    if (subTab !== 'shopping' || !currentParty.code) return;
+    void syncWithCloud({ background: true, forceRefresh: true });
+  }, [subTab, currentParty.code, syncWithCloud]);
 
   // Compute live total of all expenses
   const totalExpenses = (currentParty.expenses || []).reduce(
